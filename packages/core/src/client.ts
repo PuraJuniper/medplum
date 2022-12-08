@@ -36,7 +36,6 @@ import { arrayBufferToBase64, createReference, ProfileResource } from './utils';
 export const MEDPLUM_VERSION = process.env.MEDPLUM_VERSION;
 
 const DEFAULT_BASE_URL = 'https://api.medplum.com/';
-const DEFAULT_SCOPE = 'launch/patient openid fhirUser offline_access user/*.*';
 const DEFAULT_RESOURCE_CACHE_SIZE = 1000;
 const DEFAULT_CACHE_TIME = 60000; // 60 seconds
 const JSON_CONTENT_TYPE = 'application/json';
@@ -190,10 +189,7 @@ export interface CreatePdfFunction {
   ): Promise<any>;
 }
 
-export interface LoginRequest {
-  readonly email: string;
-  readonly password: string;
-  readonly remember?: boolean;
+export interface BaseLoginRequest {
   readonly projectId?: string;
   readonly clientId?: string;
   readonly resourceType?: string;
@@ -201,6 +197,14 @@ export interface LoginRequest {
   readonly nonce?: string;
   readonly codeChallenge?: string;
   readonly codeChallengeMethod?: string;
+  readonly googleClientId?: string;
+  readonly launch?: string;
+}
+
+export interface EmailPasswordLoginRequest extends BaseLoginRequest {
+  readonly email: string;
+  readonly password: string;
+  readonly remember?: boolean;
 }
 
 export interface NewUserRequest {
@@ -229,16 +233,9 @@ export interface GoogleCredentialResponse {
   readonly credential: string;
 }
 
-export interface GoogleLoginRequest {
+export interface GoogleLoginRequest extends BaseLoginRequest {
   readonly googleClientId: string;
   readonly googleCredential: string;
-  readonly projectId?: string;
-  readonly clientId?: string;
-  readonly resourceType?: string;
-  readonly scope?: string;
-  readonly nonce?: string;
-  readonly codeChallenge?: string;
-  readonly codeChallengeMethod?: string;
   readonly createUser?: boolean;
 }
 
@@ -275,7 +272,7 @@ export interface TokenResponse {
   readonly profile: Reference<ProfileResource>;
 }
 
-export interface BotEvent<T = Resource | Hl7Message | string> {
+export interface BotEvent<T = Resource | Hl7Message | string | Record<string, any>> {
   readonly contentType: string;
   readonly input: T;
   readonly secrets: Record<string, ProjectSecret>;
@@ -400,6 +397,11 @@ interface RequestCacheEntry {
  * const bundle = await medplum.search('Patient', 'name=Alice');
  * console.log(bundle.total);
  * ```
+ *
+ *  <head>
+ *    <meta name="algolia:pageRank" content="100" />
+ *  </head>
+
  */
 export class MedplumClient extends EventTarget {
   readonly #fetch: FetchLike;
@@ -665,12 +667,12 @@ export class MedplumClient extends EventTarget {
    * @param loginRequest Login request including email and password.
    * @returns Promise to the authentication response.
    */
-  async startLogin(loginRequest: LoginRequest): Promise<LoginAuthenticationResponse> {
+  async startLogin(loginRequest: EmailPasswordLoginRequest): Promise<LoginAuthenticationResponse> {
     const { codeChallenge, codeChallengeMethod } = this.getCodeChallenge(loginRequest);
     return this.post('auth/login', {
       ...loginRequest,
       clientId: loginRequest.clientId ?? this.#clientId,
-      scope: loginRequest.scope ?? DEFAULT_SCOPE,
+      scope: loginRequest.scope,
       codeChallengeMethod,
       codeChallenge,
     }) as Promise<LoginAuthenticationResponse>;
@@ -689,13 +691,13 @@ export class MedplumClient extends EventTarget {
     return this.post('auth/google', {
       ...loginRequest,
       clientId: loginRequest.clientId ?? this.#clientId,
-      scope: loginRequest.scope ?? DEFAULT_SCOPE,
+      scope: loginRequest.scope,
       codeChallengeMethod,
       codeChallenge,
     }) as Promise<LoginAuthenticationResponse>;
   }
 
-  getCodeChallenge(loginRequest: LoginRequest | GoogleLoginRequest): {
+  getCodeChallenge(loginRequest: BaseLoginRequest): {
     codeChallenge?: string;
     codeChallengeMethod?: string;
   } {
@@ -1148,6 +1150,16 @@ export class MedplumClient extends EventTarget {
   }
 
   /**
+   * Executes the Patient "everything" operation for a patient.
+   *
+   * Example:
+   *
+   * ```typescript
+   * const bundle = await medplum.readPatientEverything('123');
+   * console.log(bundle);
+   * ```
+   *
+   * See the FHIR "patient-everything" operation for full details: https://hl7.org/fhir/operation-patient-everything.html
    *
    * @category Read
    * @param id The Patient Id
@@ -1477,6 +1489,27 @@ export class MedplumClient extends EventTarget {
   deleteResource(resourceType: ResourceType, id: string): Promise<any> {
     this.invalidateSearches(resourceType);
     return this.delete(this.fhirUrl(resourceType, id));
+  }
+
+  /**
+   * Executes the validate operation with the provided resource.
+   *
+   * Example:
+   *
+   * ```typescript
+   * const result = await medplum.validateResource({
+   *   resourceType: 'Patient',
+   *   name: [{ given: ['Alice'], family: 'Smith' }],
+   * });
+   * ```
+   *
+   * See the FHIR "$validate" operation for full details: https://www.hl7.org/fhir/resource-operation-validate.html
+   *
+   * @param resource The FHIR resource.
+   * @returns The validate operation outcome.
+   */
+  validateResource<T extends Resource>(resource: T): Promise<OperationOutcome> {
+    return this.post(this.fhirUrl(resource.resourceType, '$validate'), resource);
   }
 
   /**
@@ -1937,7 +1970,6 @@ export class MedplumClient extends EventTarget {
     url.searchParams.set('state', sessionStorage.getItem('pkceState') as string);
     url.searchParams.set('client_id', this.#clientId);
     url.searchParams.set('redirect_uri', getBaseUrl());
-    url.searchParams.set('scope', DEFAULT_SCOPE);
     url.searchParams.set('code_challenge_method', 'S256');
     url.searchParams.set('code_challenge', sessionStorage.getItem('codeChallenge') as string);
     window.location.assign(url.toString());

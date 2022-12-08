@@ -59,8 +59,17 @@ describe('FHIR Routes', () => {
     const res = await request(app).get(`/fhir/R4/.well-known/smart-configuration`);
     expect(res.status).toBe(200);
     expect(res.headers['content-type']).toEqual('application/json; charset=utf-8');
+
+    // Required fields: https://build.fhir.org/ig/HL7/smart-app-launch/conformance.html#response
     expect(res.body.authorization_endpoint).toBeDefined();
+    expect(res.body.grant_types_supported).toBeDefined();
     expect(res.body.token_endpoint).toBeDefined();
+    expect(res.body.capabilities).toBeDefined();
+    expect(res.body.code_challenge_methods_supported).toBeDefined();
+
+    const res2 = await request(app).get(`/fhir/R4/.well-known/smart-styles.json`);
+    expect(res2.status).toBe(200);
+    expect(res2.headers['content-type']).toEqual('application/json; charset=utf-8');
   });
 
   test('Invalid JSON', async () => {
@@ -424,6 +433,22 @@ describe('FHIR Routes', () => {
       .set('Authorization', 'Bearer ' + accessToken);
     expect(res.status).toBe(400);
     expect(res.body.issue[0].details.text).toEqual('Unknown search parameter: basedOn');
+  });
+
+  test('Search by POST', async () => {
+    const res = await request(app)
+      .post(`/fhir/R4/Patient/_search`)
+      .set('Authorization', 'Bearer ' + accessToken)
+      .type('form');
+    expect(res.status).toBe(200);
+  });
+
+  test('Search by POST wrong content-type', async () => {
+    const res = await request(app)
+      .post(`/fhir/R4/Patient/_search`)
+      .set('Authorization', 'Bearer ' + accessToken)
+      .type('application/json');
+    expect(res.status).toBe(400);
   });
 
   test('Validate create success', async () => {

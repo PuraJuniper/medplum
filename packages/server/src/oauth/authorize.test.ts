@@ -129,6 +129,22 @@ describe('OAuth Authorize', () => {
     expect(location.searchParams.get('error')).toEqual('invalid_request');
   });
 
+  test('Invalid audience', async () => {
+    const params = new URLSearchParams({
+      response_type: 'code',
+      client_id: client.id as string,
+      redirect_uri: client.redirectUri as string,
+      scope: 'openid',
+      code_challenge: 'xyz',
+      code_challenge_method: 'plain',
+      aud: 'https://example.com/invalid',
+    });
+    const res = await request(app).get('/oauth2/authorize?' + params.toString());
+    expect(res.status).toBe(302);
+    const location = new URL(res.headers.location);
+    expect(location.searchParams.get('error')).toEqual('invalid_request');
+  });
+
   test('Success', async () => {
     const params = new URLSearchParams({
       response_type: 'code',
@@ -253,5 +269,36 @@ describe('OAuth Authorize', () => {
 
     const location = new URL(res.headers.location);
     expect(location.host).not.toBe('example.com');
+  });
+
+  test('Post success', async () => {
+    const params = new URLSearchParams({
+      response_type: 'code',
+      client_id: client.id as string,
+      redirect_uri: client.redirectUri as string,
+      scope: 'openid',
+      code_challenge: 'xyz',
+      code_challenge_method: 'plain',
+    });
+
+    const res = await request(app).post('/oauth2/authorize').send(params.toString());
+    expect(res.status).toBe(302);
+
+    const location = new URL(res.headers.location);
+    expect(location.searchParams.get('error')).toBeNull();
+  });
+
+  test('Post client not found', async () => {
+    const params = new URLSearchParams({
+      response_type: 'code',
+      client_id: '123',
+      redirect_uri: client.redirectUri as string,
+      scope: 'openid',
+      code_challenge: 'xyz',
+      code_challenge_method: 'plain',
+    });
+
+    const res = await request(app).post('/oauth2/authorize').send(params.toString());
+    expect(res.status).toBe(400);
   });
 });

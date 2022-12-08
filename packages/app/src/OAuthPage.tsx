@@ -32,8 +32,10 @@ export function OAuthPage(): JSX.Element | null {
       clientId={clientId}
       scope={params.get('scope') || undefined}
       nonce={params.get('nonce') || undefined}
+      launch={params.get('launch') || undefined}
       codeChallenge={params.get('code_challenge') || undefined}
       codeChallengeMethod={params.get('code_challenge_method') || undefined}
+      chooseScopes={true}
     >
       <Logo size={32} />
       <Title>Sign in to Medplum</Title>

@@ -1,10 +1,11 @@
-import { createReference, Operator } from '@medplum/core';
+import { createReference, normalizeErrorString, Operator } from '@medplum/core';
 import {
   AccessPolicy,
   ClientApplication,
   Observation,
   OperationOutcome,
   Patient,
+  Questionnaire,
   ServiceRequest,
 } from '@medplum/fhirtypes';
 import { randomUUID } from 'crypto';
@@ -1120,5 +1121,111 @@ describe('AccessPolicy', () => {
     expect(historyBundle.entry?.[0]?.resource?.subject).toBeDefined();
     expect(historyBundle.entry?.[0]?.resource?.subject?.reference).toBeDefined();
     expect(historyBundle.entry?.[0]?.resource?.subject?.display).toBeUndefined();
+  });
+
+  test('Identifier criteria', async () => {
+    const questionnaire = await systemRepo.createResource<Questionnaire>({
+      resourceType: 'Questionnaire',
+      status: 'active',
+      identifier: [{ system: 'https://example.com', value: randomUUID() }],
+    });
+
+    // AccessPolicy that only allows one specific Questionnaire
+    const accessPolicy: AccessPolicy = {
+      resourceType: 'AccessPolicy',
+      resource: [
+        {
+          resourceType: 'Questionnaire',
+          criteria: 'Questionnaire?identifier=' + questionnaire.identifier?.[0].value,
+        },
+      ],
+    };
+
+    const repo2 = new Repository({
+      author: {
+        reference: 'Practitioner/123',
+      },
+      accessPolicy,
+    });
+
+    const readResource = await repo2.readResource<Questionnaire>('Questionnaire', questionnaire?.id as string);
+    expect(readResource.id).toBe(questionnaire.id);
+
+    const historyBundle = await repo2.readHistory<Questionnaire>('Questionnaire', questionnaire?.id as string);
+    expect(historyBundle.entry).toHaveLength(1);
+    expect(historyBundle.entry?.[0]?.resource?.id).toBe(questionnaire.id);
+  });
+
+  test('Overlapping resource policies', async () => {
+    const accessPolicy: AccessPolicy = {
+      resourceType: 'AccessPolicy',
+      resource: [
+        {
+          // ServiceRequest is readonly by default
+          resourceType: 'ServiceRequest',
+          readonly: true,
+        },
+        {
+          // ServiceRequest is read/write when in 'active' status
+          resourceType: 'ServiceRequest',
+          criteria: 'ServiceRequest?status=active',
+          readonly: false,
+        },
+      ],
+    };
+
+    const repo2 = new Repository({
+      author: {
+        reference: 'Practitioner/123',
+      },
+      accessPolicy,
+    });
+
+    // Can create in "active" status
+    let sr = await repo2.createResource<ServiceRequest>({
+      resourceType: 'ServiceRequest',
+      status: 'active',
+      intent: 'order',
+      subject: { reference: 'Patient/' + randomUUID() },
+      code: { text: 'test' },
+    });
+    expect(sr.id).toBeDefined();
+
+    // Can update in "active" status
+    sr = await repo2.updateResource<ServiceRequest>({
+      ...sr,
+      priority: 'stat',
+    });
+
+    // Cannot put into "completed" status
+    try {
+      await repo2.updateResource<ServiceRequest>({
+        ...sr,
+        status: 'completed',
+      });
+      throw new Error('Should not be able to update resource');
+    } catch (err) {
+      expect(normalizeErrorString(err)).toEqual('Forbidden');
+    }
+
+    // As admin, set the status
+    sr = await systemRepo.updateResource<ServiceRequest>({
+      ...sr,
+      status: 'completed',
+    });
+
+    // Can still read
+    sr = await repo2.readResource<ServiceRequest>('ServiceRequest', sr.id as string);
+
+    // Cannot update
+    try {
+      await repo2.updateResource<ServiceRequest>({
+        ...sr,
+        priority: 'routine',
+      });
+      throw new Error('Should not be able to update resource');
+    } catch (err) {
+      expect(normalizeErrorString(err)).toEqual('Forbidden');
+    }
   });
 });

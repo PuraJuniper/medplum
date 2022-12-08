@@ -63,8 +63,8 @@ export function parseSearchRequest(
  */
 export function parseSearchUrl(url: URL): SearchRequest {
   let resourceType = url.pathname;
-  if (resourceType.startsWith('/')) {
-    resourceType = resourceType.substring(1);
+  if (resourceType.includes('/')) {
+    resourceType = resourceType.split('/').pop() as string;
   }
   return new SearchParser(resourceType, Object.fromEntries(url.searchParams.entries()));
 }
@@ -76,6 +76,7 @@ class SearchParser implements SearchRequest {
   count?: number;
   offset?: number;
   total?: 'none' | 'estimate' | 'accurate';
+  revInclude?: string;
 
   constructor(resourceType: string, query: Record<string, string[] | string | undefined>) {
     this.resourceType = resourceType;
@@ -105,15 +106,6 @@ class SearchParser implements SearchRequest {
     }
 
     switch (code) {
-      case '_id':
-      case 'id':
-        this.filters.push({
-          code: '_id',
-          operator: Operator.EQUALS,
-          value,
-        });
-        break;
-
       case '_account':
       case '_compartment':
       case '_project':
@@ -122,17 +114,6 @@ class SearchParser implements SearchRequest {
           operator: Operator.EQUALS,
           value,
         });
-        break;
-
-      case '_lastUpdated':
-      case 'meta.lastUpdated':
-        {
-          const parsed = parsePrefix(value);
-          this.filters.push({
-            code: '_lastUpdated',
-            ...parsed,
-          });
-        }
         break;
 
       case '_sort':
@@ -154,6 +135,13 @@ class SearchParser implements SearchRequest {
       case '_summary':
         this.total = 'estimate';
         this.count = 0;
+        break;
+
+      case '_revinclude':
+        this.revInclude = value;
+        if (this.revInclude !== 'Provenance:target') {
+          throw badRequest('Unsupported revinclude: ' + code);
+        }
         break;
 
       default: {

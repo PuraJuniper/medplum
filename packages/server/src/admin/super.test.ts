@@ -4,6 +4,7 @@ import { randomUUID } from 'crypto';
 import express from 'express';
 import request from 'supertest';
 import { initApp, shutdownApp } from '../app';
+import { registerNew } from '../auth/register';
 import { loadTestConfig } from '../config';
 import { systemRepo } from '../fhir/repo';
 import { generateAccessToken } from '../oauth/keys';
@@ -22,6 +23,9 @@ describe('Super Admin routes', () => {
 
     ({ project, client } = await createTestProject());
 
+    // Mark the project as a "Super Admin" project
+    await systemRepo.updateResource({ ...project, superAdmin: true });
+
     const practitioner1 = await systemRepo.createResource<Practitioner>({ resourceType: 'Practitioner' });
 
     const practitioner2 = await systemRepo.createResource<Practitioner>({ resourceType: 'Practitioner' });
@@ -32,7 +36,6 @@ describe('Super Admin routes', () => {
       lastName: 'Admin',
       email: `super${randomUUID()}@example.com`,
       passwordHash: 'abc',
-      admin: true,
     });
 
     const user2 = await systemRepo.createResource<User>({
@@ -41,7 +44,6 @@ describe('Super Admin routes', () => {
       lastName: 'Admin',
       email: `normie${randomUUID()}@example.com`,
       passwordHash: 'abc',
-      admin: false,
     });
 
     const membership1 = await systemRepo.createResource<ProjectMembership>({
@@ -66,7 +68,7 @@ describe('Super Admin routes', () => {
       membership: createReference(membership1),
       authTime: new Date().toISOString(),
       scope: 'openid',
-      admin: true,
+      superAdmin: true,
     });
 
     const login2 = await systemRepo.createResource<Login>({
@@ -77,7 +79,7 @@ describe('Super Admin routes', () => {
       membership: createReference(membership2),
       authTime: new Date().toISOString(),
       scope: 'openid',
-      admin: false,
+      superAdmin: false,
     });
 
     adminAccessToken = await generateAccessToken({
@@ -197,5 +199,69 @@ describe('Super Admin routes', () => {
       });
 
     expect(res.status).toBe(400);
+  });
+
+  test('Set password access denied', async () => {
+    const res = await request(app)
+      .post('/admin/super/setpassword')
+      .set('Authorization', 'Bearer ' + nonAdminAccessToken)
+      .type('json')
+      .send({
+        email: 'alice@example.com',
+        password: 'password123',
+      });
+
+    expect(res.status).toBe(403);
+  });
+
+  test('Set password missing password', async () => {
+    const res = await request(app)
+      .post('/admin/super/setpassword')
+      .set('Authorization', 'Bearer ' + adminAccessToken)
+      .type('json')
+      .send({
+        email: 'alice@example.com',
+        password: '',
+      });
+
+    expect(res.status).toBe(400);
+    expect(res.body.issue[0].details.text).toBe('Invalid password, must be at least 8 characters');
+  });
+
+  test('Set password user not found', async () => {
+    const res = await request(app)
+      .post('/admin/super/setpassword')
+      .set('Authorization', 'Bearer ' + adminAccessToken)
+      .type('json')
+      .send({
+        email: 'user-not-found@example.com',
+        password: 'password123',
+      });
+
+    expect(res.status).toBe(400);
+    expect(res.body.issue[0].details.text).toBe('User not found');
+  });
+
+  test('Set password success', async () => {
+    const email = `alice${randomUUID()}@example.com`;
+
+    await registerNew({
+      firstName: 'Alice',
+      lastName: 'Smith',
+      projectName: 'Alice Project',
+      email,
+      password: 'password!@#',
+    });
+
+    const res = await request(app)
+      .post('/admin/super/setpassword')
+      .set('Authorization', 'Bearer ' + adminAccessToken)
+      .type('json')
+      .send({
+        email,
+        password: 'new-password!@#',
+      });
+
+    expect(res.status).toBe(200);
   });
 });

@@ -7,7 +7,16 @@ import {
   ProfileResource,
   resolveId,
 } from '@medplum/core';
-import { BundleEntry, ClientApplication, Login, Project, ProjectMembership, Reference, User } from '@medplum/fhirtypes';
+import {
+  BundleEntry,
+  ClientApplication,
+  Login,
+  Project,
+  ProjectMembership,
+  Reference,
+  SmartAppLaunch,
+  User,
+} from '@medplum/fhirtypes';
 import bcrypt from 'bcryptjs';
 import { timingSafeEqual } from 'crypto';
 import { JWTPayload } from 'jose';
@@ -25,6 +34,7 @@ export interface LoginRequest {
   readonly resourceType?: string;
   readonly projectId?: string;
   readonly clientId?: string;
+  readonly launchId?: string;
   readonly codeChallenge?: string;
   readonly codeChallengeMethod?: string;
   readonly googleCredentials?: GoogleCredentialClaims;
@@ -78,6 +88,11 @@ export async function tryLogin(request: LoginRequest): Promise<Login> {
     client = await systemRepo.readResource<ClientApplication>('ClientApplication', request.clientId);
   }
 
+  let launch: SmartAppLaunch | undefined;
+  if (request.launchId) {
+    launch = await systemRepo.readResource<SmartAppLaunch>('SmartAppLaunch', request.launchId);
+  }
+
   const user = await getUserByEmail(request.email, request.projectId);
   if (!user) {
     throw badRequest('Email or password is invalid');
@@ -85,11 +100,12 @@ export async function tryLogin(request: LoginRequest): Promise<Login> {
 
   await authenticate(request, user);
 
-  const refreshSecret = request.remember ? generateSecret(48) : undefined;
+  const refreshSecret = request.remember ? generateSecret(32) : undefined;
 
   const login = await systemRepo.createResource<Login>({
     resourceType: 'Login',
     client: client && createReference(client),
+    launch: launch && createReference(launch),
     user: createReference(user),
     authMethod: request.authMethod,
     authTime: new Date().toISOString(),
@@ -100,7 +116,6 @@ export async function tryLogin(request: LoginRequest): Promise<Login> {
     nonce: request.nonce,
     codeChallenge: request.codeChallenge,
     codeChallengeMethod: request.codeChallengeMethod,
-    admin: user.admin,
     remoteAddress: request.remoteAddress,
     userAgent: request.userAgent,
   });
@@ -274,6 +289,42 @@ export async function setLoginMembership(login: Login, membershipId: string): Pr
     ...login,
     membership: createReference(membership),
     superAdmin: project.superAdmin,
+  });
+}
+
+/**
+ * Sets the login scope.
+ * Ensures that the scope is the same or a subset of the originally requested scope.
+ * @param login The login before the membership is set.
+ * @param scope The scope to set.
+ * @returns The updated login.
+ */
+export async function setLoginScope(login: Login, scope: string): Promise<Login> {
+  if (login.revoked) {
+    throw badRequest('Login revoked');
+  }
+
+  if (login.granted) {
+    throw badRequest('Login granted');
+  }
+
+  // Get existing scope
+  const existingScopes = login.scope?.split(' ') || [];
+
+  // Get submitted scope
+  const submittedScopes = scope.split(' ');
+
+  // If user requests any scope that is not in existing scope, then reject
+  for (const scope of submittedScopes) {
+    if (!existingScopes.includes(scope)) {
+      throw badRequest('Invalid scope');
+    }
+  }
+
+  // Otherwise update scope
+  return systemRepo.updateResource<Login>({
+    ...login,
+    scope: submittedScopes.join(' '),
   });
 }
 

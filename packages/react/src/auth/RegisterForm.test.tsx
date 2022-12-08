@@ -5,7 +5,7 @@ import { randomUUID, webcrypto } from 'crypto';
 import React from 'react';
 import { MemoryRouter } from 'react-router-dom';
 import { TextEncoder } from 'util';
-import { MedplumProvider } from '../MedplumProvider';
+import { MedplumProvider } from '../MedplumProvider/MedplumProvider';
 import { RegisterForm, RegisterFormProps } from './RegisterForm';
 
 const recaptchaSiteKey = 'abc';
@@ -47,6 +47,8 @@ function mockFetch(url: string, options: any): Promise<any> {
       code: '1',
     };
   } else if (options.method === 'POST' && url.endsWith('auth/google')) {
+    const body = JSON.parse(options.body);
+    expect(body.codeChallenge).toBeDefined();
     status = 200;
     result = {
       login: '1',

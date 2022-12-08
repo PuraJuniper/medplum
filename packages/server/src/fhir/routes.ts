@@ -3,15 +3,17 @@ import { OperationOutcome, Resource } from '@medplum/fhirtypes';
 import { NextFunction, Request, Response, Router } from 'express';
 import { Operation } from 'fast-json-patch';
 import { asyncWrap } from '../async';
-import { getConfig } from '../config';
 import { authenticateToken } from '../oauth/middleware';
 import { processBatch } from './batch';
+import { bulkDataRouter } from './bulkdata';
 import { getCapabilityStatement } from './metadata';
 import { csvHandler } from './operations/csv';
 import { deployHandler } from './operations/deploy';
 import { executeHandler } from './operations/execute';
 import { expandOperator } from './operations/expand';
 import { graphqlHandler } from './operations/graphql';
+import { groupExportHandler } from './operations/groupexport';
+import { patientEverythingHandler } from './operations/patienteverything';
 import { planDefinitionApplyHandler } from './operations/plandefinitionapply';
 import { resourceGraphHandler } from './operations/resourcegraph';
 import { sendOutcome } from './outcomes';
@@ -19,6 +21,7 @@ import { Repository } from './repo';
 import { rewriteAttachments, RewriteMode } from './rewrite';
 import { validateResource } from './schema';
 import { parseSearchRequest } from './search';
+import { smartConfigurationHandler, smartStylingHandler } from './smart';
 
 export const fhirRouter = Router();
 
@@ -61,35 +64,8 @@ publicRoutes.get('/metadata', (_req: Request, res: Response) => {
 });
 
 // SMART-on-FHIR configuration
-// See:
-// 1) https://www.hl7.org/fhir/smart-app-launch/conformance/index.html
-// 2) https://www.hl7.org/fhir/uv/bulkdata/authorization/index.html
-publicRoutes.get('/.well-known/smart-configuration', (_req: Request, res: Response) => {
-  const config = getConfig();
-  res
-    .status(200)
-    .contentType('application/json')
-    .json({
-      authorization_endpoint: config.authorizeUrl,
-      token_endpoint: config.tokenUrl,
-      capabilities: [
-        'client-confidential-symmetric',
-        'client-public',
-        'context-banner',
-        'context-ehr-patient',
-        'context-standalone-patient',
-        'context-style',
-        'launch-ehr',
-        'launch-standalone',
-        'permission-offline',
-        'permission-patient',
-        'permission-user',
-        'sso-openid-connect',
-      ],
-      token_endpoint_auth_methods: ['private_key_jwt'],
-      token_endpoint_auth_signing_alg_values_supported: ['RS256'],
-    });
-});
+publicRoutes.get('/.well-known/smart-configuration', smartConfigurationHandler);
+publicRoutes.get('/.well-known/smart-styles.json', smartStylingHandler);
 
 // Protected routes require authentication
 const protectedRoutes = Router();
@@ -108,6 +84,12 @@ protectedRoutes.post('/Bot/:id/([$]|%24)execute', executeHandler);
 // Bot $deploy operation
 protectedRoutes.post('/Bot/:id/([$]|%24)deploy', deployHandler);
 
+// Group $export operation
+protectedRoutes.get('/Group/:id/([$]|%24)export', asyncWrap(groupExportHandler));
+
+// Bulk Data
+protectedRoutes.use('/bulkdata', bulkDataRouter);
+
 // GraphQL
 protectedRoutes.post('/([$]|%24)graphql', graphqlHandler);
 
@@ -116,6 +98,9 @@ protectedRoutes.post('/PlanDefinition/:id/([$]|%24)apply', asyncWrap(planDefinit
 
 // Resource $graph operation
 protectedRoutes.get('/:resourceType/:id/([$]|%24)graph', asyncWrap(resourceGraphHandler));
+
+// Patient $everything operation
+protectedRoutes.get('/Patient/:id/([$]|%24)everything', asyncWrap(patientEverythingHandler));
 
 // Execute batch
 protectedRoutes.post(
@@ -143,6 +128,22 @@ protectedRoutes.get(
     const { resourceType } = req.params;
     const repo = res.locals.repo as Repository;
     const query = req.query as Record<string, string[] | string | undefined>;
+    const bundle = await repo.search(parseSearchRequest(resourceType, query));
+    await sendResponse(res, allOk, bundle);
+  })
+);
+
+// Search by POST
+protectedRoutes.post(
+  '/:resourceType/_search',
+  asyncWrap(async (req: Request, res: Response) => {
+    if (!req.is('application/x-www-form-urlencoded')) {
+      res.status(400).send('Unsupported content type');
+      return;
+    }
+    const { resourceType } = req.params;
+    const repo = res.locals.repo as Repository;
+    const query = req.body as Record<string, string[] | string | undefined>;
     const bundle = await repo.search(parseSearchRequest(resourceType, query));
     await sendResponse(res, allOk, bundle);
   })

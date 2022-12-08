@@ -1,10 +1,10 @@
-import { Button, Center, Group, Stack, Text, TextInput, Title } from '@mantine/core';
+import { Anchor, Button, Center, Group, Stack, Text, TextInput, Title } from '@mantine/core';
 import { LoginAuthenticationResponse } from '@medplum/core';
 import { OperationOutcome } from '@medplum/fhirtypes';
 import React, { useState } from 'react';
-import { Form } from '../Form';
-import { Logo } from '../Logo';
-import { useMedplum } from '../MedplumProvider';
+import { Form } from '../Form/Form';
+import { Logo } from '../Logo/Logo';
+import { useMedplum } from '../MedplumProvider/MedplumProvider';
 import { getErrorsForInput } from '../utils/outcomes';
 
 export interface NewProjectFormProps {
@@ -45,9 +45,10 @@ export function NewProjectForm(props: NewProjectFormProps): JSX.Element {
           error={getErrorsForInput(outcome, 'firstName')}
         />
         <Text color="dimmed" size="xs">
-          By clicking submit you agree to the Medplum <a href="https://www.medplum.com/privacy">Privacy&nbsp;Policy</a>
+          By clicking submit you agree to the Medplum{' '}
+          <Anchor href="https://www.medplum.com/privacy">Privacy&nbsp;Policy</Anchor>
           {' and '}
-          <a href="https://www.medplum.com/terms">Terms&nbsp;of&nbsp;Service</a>.
+          <Anchor href="https://www.medplum.com/terms">Terms&nbsp;of&nbsp;Service</Anchor>.
         </Text>
       </Stack>
       <Group position="right" mt="xl" noWrap>

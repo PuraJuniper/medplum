@@ -94,24 +94,19 @@ const config = {
             position: 'left',
           },
           {
-            to: '/blueprints',
-            label: 'Blueprints',
+            to: '/solutions',
+            label: 'Solutions',
             position: 'left',
           },
           {
             type: 'doc',
             docId: 'home',
             position: 'left',
-            label: 'Docs',
-          },
-          {
-            to: '/docs/tutorials',
-            label: 'Tutorials',
-            position: 'left',
+            label: 'Documentation',
           },
           {
             to: '/docs/api',
-            label: 'API',
+            label: 'Reference',
             position: 'left',
           },
           {
@@ -144,15 +139,15 @@ const config = {
             items: [
               {
                 label: 'Getting started',
-                to: '/docs/tutorials/api-basics/create-fhir-data',
-              },
-              {
-                label: 'Playing with Medplum',
                 to: '/docs/tutorials',
               },
               {
                 label: 'Documentation',
                 to: '/docs',
+              },
+              {
+                label: 'Search',
+                to: '/search',
               },
             ],
           },
@@ -174,6 +169,10 @@ const config = {
               {
                 label: 'GitHub',
                 to: 'https://github.com/medplum/medplum',
+              },
+              {
+                label: 'Contributing',
+                to: '/docs/contributing',
               },
             ],
           },

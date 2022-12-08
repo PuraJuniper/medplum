@@ -428,6 +428,45 @@ describe('FHIR schema', () => {
       console.log(JSON.stringify(outcome, null, 2).substring(0, 1000));
     }
   });
+
+  test('Choice of type', () => {
+    // Observation.value[x]
+    expect(() =>
+      validateResource({ resourceType: 'Observation', status: 'final', code: { text: 'x' }, valueString: 'xyz' })
+    ).not.toThrow();
+    expect(() =>
+      validateResource({
+        resourceType: 'Observation',
+        status: 'final',
+        code: { text: 'x' },
+        valueDateTime: '2020-01-01T00:00:00Z',
+      })
+    ).not.toThrow();
+    expect(() =>
+      validateResource({ resourceType: 'Observation', status: 'final', code: { text: 'x' }, valueXyz: 'xyz' })
+    ).toThrow();
+
+    // Patient.multipleBirth[x] is a choice of boolean or integer
+    expect(() => validateResource({ resourceType: 'Patient', multipleBirthBoolean: true })).not.toThrow();
+    expect(() => validateResource({ resourceType: 'Patient', multipleBirthInteger: 2 })).not.toThrow();
+    expect(() => validateResource({ resourceType: 'Patient', multipleBirthXyz: 'xyz' })).toThrow();
+  });
+
+  test('Primitive element', () => {
+    expect(() => validateResource({ resourceType: 'Patient', birthDate: '1990-01-01', _birthDate: {} })).not.toThrow();
+    expect(() =>
+      validateResource({ resourceType: 'Patient', birthDate: '1990-01-01', _birthDate: '1990-01-01' })
+    ).toThrow();
+    expect(() => validateResource({ resourceType: 'Patient', _birthDate: {} })).toThrow();
+    expect(() => validateResource({ resourceType: 'Patient', _xyz: {} } as unknown as Patient)).toThrow();
+    expect(() =>
+      validateResource({
+        resourceType: 'Questionnaire',
+        status: 'active',
+        item: [{ linkId: 'test', type: 'string', text: 'test', _text: { extension: [] } }],
+      })
+    ).not.toThrow();
+  });
 });
 
 function fail(reason: string): never {

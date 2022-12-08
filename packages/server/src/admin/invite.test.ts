@@ -185,7 +185,7 @@ describe('Admin Invite', () => {
         email: `carol${randomUUID()}@example.com`,
       });
 
-    expect(res3.status).toBe(404);
+    expect(res3.status).toBe(403);
     expect(SESv2Client).not.toHaveBeenCalled();
     expect(SendEmailCommand).not.toHaveBeenCalled();
   });
@@ -217,5 +217,33 @@ describe('Admin Invite', () => {
     expect(res2.body.issue).toBeDefined();
     expect(SESv2Client).not.toHaveBeenCalled();
     expect(SendEmailCommand).not.toHaveBeenCalled();
+  });
+
+  test('Do not send email', async () => {
+    // First, Alice creates a project
+    const { project, accessToken } = await registerNew({
+      firstName: 'Alice',
+      lastName: 'Smith',
+      projectName: 'Alice Project',
+      email: `alice${randomUUID()}@example.com`,
+      password: 'password!@#',
+    });
+
+    // Second, Alice invites Bob to the project
+    const bobEmail = `bob${randomUUID()}@example.com`;
+    const res2 = await request(app)
+      .post('/admin/projects/' + project.id + '/invite')
+      .set('Authorization', 'Bearer ' + accessToken)
+      .send({
+        resourceType: 'Practitioner',
+        firstName: 'Bob',
+        lastName: 'Jones',
+        email: bobEmail,
+        sendEmail: false,
+      });
+
+    expect(res2.status).toBe(200);
+    expect(SESv2Client).toHaveBeenCalledTimes(0);
+    expect(SendEmailCommand).toHaveBeenCalledTimes(0);
   });
 });

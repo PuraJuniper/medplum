@@ -1,6 +1,7 @@
 import {
   allOk,
   badRequest,
+  createReference,
   deepEquals,
   DEFAULT_SEARCH_COUNT,
   evalFhirPath,
@@ -17,6 +18,7 @@ import {
   normalizeErrorString,
   notFound,
   Operator as FhirOperator,
+  ProfileResource,
   resolveId,
   SearchParameterDetails,
   SearchParameterType,
@@ -41,6 +43,7 @@ import {
 } from '@medplum/fhirtypes';
 import { randomUUID } from 'crypto';
 import { applyPatch, JsonPatchError, Operation } from 'fast-json-patch';
+import { PoolClient } from 'pg';
 import { URL } from 'url';
 import validator from 'validator';
 import { getConfig } from '../config';
@@ -65,9 +68,11 @@ import { addSubscriptionJobs } from '../workers/subscription';
 import { validateResourceWithJsonSchema } from './jsonschema';
 import { AddressTable, ContactPointTable, HumanNameTable, IdentifierTable, LookupTable } from './lookups';
 import { getPatient } from './patient';
+import { validateReferences } from './references';
 import { rewriteAttachments, RewriteMode } from './rewrite';
 import { validateResource, validateResourceType } from './schema';
 import { parseSearchUrl } from './search';
+import { applySmartScopes } from './smart';
 import {
   Column,
   Condition,
@@ -126,6 +131,13 @@ export interface RepositoryContext {
    * significantly more relaxed.
    */
   strictMode?: boolean;
+
+  /**
+   * Optional flag to validate references on write operations.
+   * If enabled, the repository will check that all references are valid,
+   * and that the current user has access to the referenced resource.
+   */
+  checkReferencesOnWrite?: boolean;
 
   /**
    * Optional flag to include Medplum extended meta fields.
@@ -396,6 +408,10 @@ export class Repository {
       validateResourceWithJsonSchema(resource);
     }
 
+    if (this.#context.checkReferencesOnWrite) {
+      await validateReferences(this, resource);
+    }
+
     const { resourceType, id } = resource;
     if (!id) {
       throw badRequest('Missing id');
@@ -458,10 +474,24 @@ export class Repository {
       throw forbidden;
     }
 
+    // Note: We don't try/catch this because if connecting throws an exception.
+    // We don't need to dispose of the client (it will be undefined).
+    // https://node-postgres.com/features/transactions
+    const client = await getClient().connect();
+    try {
+      await client.query('BEGIN');
+      await this.#writeResource(client, result);
+      await this.#writeResourceVersion(client, result);
+      await this.#writeLookupTables(client, result);
+      await client.query('COMMIT');
+    } catch (err) {
+      await client.query('ROLLBACK');
+      throw err;
+    } finally {
+      client.release();
+    }
+
     await setCacheEntry(result);
-    await this.#writeResource(result);
-    await this.#writeResourceVersion(result);
-    await this.#writeLookupTables(result);
     await addBackgroundJobs(result);
     this.#removeHiddenFields(result);
     return result;
@@ -581,8 +611,23 @@ export class Repository {
 
     const resource = await this.#readResourceImpl<T>(resourceType, id);
     (resource.meta as Meta).compartment = this.#getCompartments(resource);
-    await this.#writeResource(resource as T);
-    await this.#writeLookupTables(resource as T);
+
+    // Note: We don't try/catch this because if connecting throws an exception.
+    // We don't need to dispose of the client (it will be undefined).
+    // https://node-postgres.com/features/transactions
+    const client = await getClient().connect();
+    try {
+      await client.query('BEGIN');
+      await this.#writeResource(client, resource as T);
+      await this.#writeLookupTables(client, resource as T);
+      await client.query('COMMIT');
+    } catch (err) {
+      await client.query('ROLLBACK');
+      throw err;
+    } finally {
+      client.release();
+    }
+
     return resource as T;
   }
 
@@ -732,11 +777,33 @@ export class Repository {
     builder.offset(searchRequest.offset || 0);
 
     const rows = await builder.execute(client);
+    const resources = rows.slice(0, count).map((row) => JSON.parse(row.content as string)) as T[];
+    const entry = resources.map(
+      (resource) =>
+        ({
+          fullUrl: this.#getFullUrl(resourceType, resource.id as string),
+          resource: this.#removeHiddenFields(resource),
+        } as BundleEntry)
+    );
+
+    if (searchRequest.revInclude === 'Provenance:target') {
+      for (const resource of resources) {
+        entry.push({
+          search: {
+            mode: 'include',
+          },
+          resource: {
+            resourceType: 'Provenance',
+            target: [createReference(resource)],
+            recorded: resource.meta?.lastUpdated,
+            agent: [{ who: resource.meta?.author as Reference<ProfileResource> | undefined }],
+          },
+        });
+      }
+    }
+
     return {
-      entry: rows.slice(0, count).map((row) => ({
-        fullUrl: this.#getFullUrl(resourceType, row.id),
-        resource: this.#removeHiddenFields(JSON.parse(row.content as string)),
-      })),
+      entry: entry as BundleEntry<T>[],
       hasMore: rows.length > count,
     };
   }
@@ -868,14 +935,15 @@ export class Repository {
           // Deprecated - to be removed
           // Add compartment restriction for the access policy.
           expressions.push(new Condition('compartments', Operator.ARRAY_CONTAINS, [policyCompartmentId], 'UUID[]'));
-        }
-
-        if (policy.criteria) {
+        } else if (policy.criteria) {
           // Add subquery for access policy criteria.
           const searchRequest = this.#parseCriteriaAsSearchRequest(policy.criteria);
           const accessPolicyConjunction = new Conjunction([]);
           this.#addSearchFilters(builder, accessPolicyConjunction, searchRequest);
           expressions.push(accessPolicyConjunction);
+        } else {
+          // Allow access to all resources in the compartment.
+          return;
         }
       }
     }
@@ -1025,10 +1093,14 @@ export class Repository {
    */
   #addReferenceSearchFilter(predicate: Conjunction, details: SearchParameterDetails, filter: Filter): void {
     // TODO: Support reference queries (filter.value === 'Patient?identifier=123')
+    let value = filter.value;
+    if (!value.includes('/') && (details.columnName === 'subject' || details.columnName === 'patient')) {
+      value = 'Patient/' + value;
+    }
     if (details.array) {
-      predicate.where(details.columnName, Operator.ARRAY_CONTAINS, filter.value);
+      predicate.where(details.columnName, Operator.ARRAY_CONTAINS, value);
     } else {
-      predicate.where(details.columnName, Operator.EQUALS, filter.value);
+      predicate.where(details.columnName, Operator.EQUALS, value);
     }
   }
 
@@ -1087,10 +1159,10 @@ export class Repository {
    * Writes the resource to the resource table.
    * This builds all search parameter columns.
    * This does *not* write the version to the history table.
+   * @param client The database client inside the transaction.
    * @param resource The resource.
    */
-  async #writeResource(resource: Resource): Promise<void> {
-    const client = getClient();
+  async #writeResource(client: PoolClient, resource: Resource): Promise<void> {
     const resourceType = resource.resourceType;
     const meta = resource.meta as Meta;
     const compartments = meta.compartment?.map((ref) => resolveId(ref));
@@ -1116,10 +1188,10 @@ export class Repository {
 
   /**
    * Writes a version of the resource to the resource history table.
+   * @param client The database client inside the transaction.
    * @param resource The resource.
    */
-  async #writeResourceVersion(resource: Resource): Promise<void> {
-    const client = getClient();
+  async #writeResourceVersion(client: PoolClient, resource: Resource): Promise<void> {
     const resourceType = resource.resourceType;
     const meta = resource.meta as Meta;
     const content = stringify(resource);
@@ -1155,7 +1227,10 @@ export class Repository {
 
     const patient = getPatient(resource);
     if (patient) {
-      result.push(patient);
+      const patientId = resolveId(patient);
+      if (patientId && validator.isUUID(patientId)) {
+        result.push(patient);
+      }
     }
 
     return result;
@@ -1360,9 +1435,14 @@ export class Repository {
     return undefined;
   }
 
-  async #writeLookupTables(resource: Resource): Promise<void> {
+  /**
+   *
+   * @param client The database client inside the transaction.
+   * @param resource
+   */
+  async #writeLookupTables(client: PoolClient, resource: Resource): Promise<void> {
     for (const lookupTable of lookupTables) {
-      await lookupTable.indexResource(resource);
+      await lookupTable.indexResource(client, resource);
     }
   }
 
@@ -1598,12 +1678,11 @@ export class Repository {
       for (const resourcePolicy of this.#context.accessPolicy.resource) {
         if (
           (resourcePolicy.resourceType === resourceType || resourcePolicy.resourceType === '*') &&
-          !resourcePolicy.readonly
+          !resourcePolicy.readonly &&
+          (!resourcePolicy.criteria ||
+            matchesSearchRequest(resource, this.#parseCriteriaAsSearchRequest(resourcePolicy.criteria)))
         ) {
-          return (
-            !resourcePolicy.criteria ||
-            matchesSearchRequest(resource, this.#parseCriteriaAsSearchRequest(resourcePolicy.criteria))
-          );
+          return true;
         }
       }
     }
@@ -1821,29 +1900,57 @@ function fhirOperatorToSqlOperator(fhirOperator: FhirOperator): Operator {
  * @param membership The active project membership.
  * @param strictMode Optional flag to enable strict mode for in-depth FHIR schema validation.
  * @param extendedMode Optional flag to enable extended mode for custom Medplum properties.
+ * @param checkReferencesOnWrite Optional flag to enable reference checking on write.
  * @returns A repository configured for the login details.
  */
 export async function getRepoForLogin(
   login: Login,
   membership: ProjectMembership,
   strictMode?: boolean,
-  extendedMode?: boolean
+  extendedMode?: boolean,
+  checkReferencesOnWrite?: boolean
 ): Promise<Repository> {
   let accessPolicy: AccessPolicy | undefined = undefined;
 
   if (membership.accessPolicy) {
     accessPolicy = await systemRepo.readReference(membership.accessPolicy);
+    accessPolicy = setupAccessPolicy(accessPolicy, membership.profile as Reference<ProfileResource>);
+  }
+
+  if (login.scope) {
+    // If the login specifies SMART scopes,
+    // then set the access policy to use those scopes
+    accessPolicy = applySmartScopes(accessPolicy, login.scope);
   }
 
   return new Repository({
     project: resolveId(membership.project) as string,
     author: membership.profile as Reference,
     remoteAddress: login.remoteAddress,
-    superAdmin: login.admin || login.superAdmin,
+    superAdmin: login.superAdmin,
     accessPolicy,
     strictMode,
     extendedMode,
+    checkReferencesOnWrite,
   });
+}
+
+/**
+ * Sets up an AccessPolicy by resolving variables.
+ * @param original The original AccessPolicy.
+ * @param profile The user profile.
+ * @returns The AccessPolicy with variables resolved.
+ */
+function setupAccessPolicy(original: AccessPolicy, profile: Reference<ProfileResource>): AccessPolicy {
+  const profileReference = profile.reference as string;
+  const profileId = resolveId(profile) as string;
+  const templateJson = JSON.stringify(original);
+  const policyJson = templateJson
+    .replaceAll('%patient.id', profileId)
+    .replaceAll('%profile.id', profileId)
+    .replaceAll('%patient', profileReference)
+    .replaceAll('%profile', profileReference);
+  return JSON.parse(policyJson) as AccessPolicy;
 }
 
 export const systemRepo = new Repository({
