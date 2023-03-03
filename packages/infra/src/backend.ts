@@ -15,6 +15,7 @@ import {
   Duration,
   RemovalPolicy,
 } from 'aws-cdk-lib';
+import { Repository } from 'aws-cdk-lib/aws-ecr';
 import { Construct } from 'constructs';
 import { MedplumInfraConfig } from './config';
 import { awsManagedRules } from './waf';
@@ -30,22 +31,30 @@ export class BackEnd extends Construct {
 
     const name = config.name;
 
-    // VPC Flow Logs
-    const vpcFlowLogs = new logs.LogGroup(this, 'VpcFlowLogs', {
-      logGroupName: '/medplum/flowlogs/' + name,
-      removalPolicy: RemovalPolicy.DESTROY,
-    });
-
     // VPC
-    const vpc = new ec2.Vpc(this, 'VPC', {
-      maxAzs: config.maxAzs,
-      flowLogs: {
-        cloudwatch: {
-          destination: ec2.FlowLogDestination.toCloudWatchLogs(vpcFlowLogs),
-          trafficType: ec2.FlowLogTrafficType.ALL,
+    let vpc: ec2.IVpc;
+
+    if (config.vpcId) {
+      // Lookup VPC by ARN
+      vpc = ec2.Vpc.fromLookup(this, 'VPC', { vpcId: config.vpcId });
+    } else {
+      // VPC Flow Logs
+      const vpcFlowLogs = new logs.LogGroup(this, 'VpcFlowLogs', {
+        logGroupName: '/medplum/flowlogs/' + name,
+        removalPolicy: RemovalPolicy.DESTROY,
+      });
+
+      // Create VPC
+      vpc = new ec2.Vpc(this, 'VPC', {
+        maxAzs: config.maxAzs,
+        flowLogs: {
+          cloudwatch: {
+            destination: ec2.FlowLogDestination.toCloudWatchLogs(vpcFlowLogs),
+            trafficType: ec2.FlowLogTrafficType.ALL,
+          },
         },
-      },
-    });
+      });
+    }
 
     // Bot Lambda Role
     const botLambdaRole = new iam.Role(this, 'BotLambdaRole', {
@@ -53,25 +62,34 @@ export class BackEnd extends Construct {
     });
 
     // RDS
-    const rdsCluster = new rds.DatabaseCluster(this, 'DatabaseCluster', {
-      engine: rds.DatabaseClusterEngine.auroraPostgres({
-        version: rds.AuroraPostgresEngineVersion.VER_12_9,
-      }),
-      credentials: rds.Credentials.fromGeneratedSecret('clusteradmin'),
-      defaultDatabaseName: 'medplum',
-      storageEncrypted: true,
-      instances: config.rdsInstances,
-      instanceProps: {
-        vpc: vpc,
-        vpcSubnets: {
-          subnetType: ec2.SubnetType.PRIVATE_WITH_EGRESS,
+    let rdsCluster = undefined;
+    let rdsSecretsArn = config.rdsSecretsArn;
+    if (!rdsSecretsArn) {
+      rdsCluster = new rds.DatabaseCluster(this, 'DatabaseCluster', {
+        engine: rds.DatabaseClusterEngine.auroraPostgres({
+          version: rds.AuroraPostgresEngineVersion.VER_12_9,
+        }),
+        credentials: rds.Credentials.fromGeneratedSecret('clusteradmin'),
+        defaultDatabaseName: 'medplum',
+        storageEncrypted: true,
+        instances: config.rdsInstances,
+        instanceProps: {
+          vpc: vpc,
+          vpcSubnets: {
+            subnetType: ec2.SubnetType.PRIVATE_WITH_EGRESS,
+          },
+          instanceType: config.rdsInstanceType ? new ec2.InstanceType(config.rdsInstanceType) : undefined,
+          enablePerformanceInsights: true,
         },
-      },
-      backup: {
-        retention: Duration.days(7),
-      },
-      cloudwatchLogsExports: ['postgresql'],
-    });
+        backup: {
+          retention: Duration.days(7),
+        },
+        cloudwatchLogsExports: ['postgresql'],
+        instanceUpdateBehaviour: rds.InstanceUpdateBehaviour.ROLLING,
+      });
+
+      rdsSecretsArn = (rdsCluster.secret as secretsmanager.ISecret).secretArn;
+    }
 
     // Redis
     // Important: For HIPAA compliance, you must specify TransitEncryptionEnabled as true, an AuthToken, and a CacheSubnetGroup.
@@ -232,9 +250,29 @@ export class BackEnd extends Construct {
     });
 
     // Task Containers
+    let serverImage: ecs.ContainerImage | undefined = undefined;
+    // Pull out the image name and tag from the image URI if it's an ECR image
+    const ecrImageUriRegex = new RegExp(
+      `^${config.accountNumber}\\.dkr\\.ecr\\.${config.region}\\.amazonaws\\.com/(.*)[:@](.*)$`
+    );
+    const nameTagMatches = config.serverImage.match(ecrImageUriRegex);
+    const serverImageName = nameTagMatches?.[1];
+    const serverImageTag = nameTagMatches?.[2];
+    if (serverImageName && serverImageTag) {
+      // Creating an ecr repository image will automatically grant fine-grained permissions to ecs to access the image
+      const ecrRepo = Repository.fromRepositoryArn(
+        this,
+        'ServerImageRepo',
+        `arn:aws:ecr:${config.region}:${config.accountNumber}:repository/${serverImageName}`
+      );
+      serverImage = ecs.ContainerImage.fromEcrRepository(ecrRepo, serverImageTag);
+    } else {
+      // Otherwise, use the standard container image
+      serverImage = ecs.ContainerImage.fromRegistry(config.serverImage);
+    }
     const serviceContainer = taskDefinition.addContainer('MedplumTaskDefinition', {
-      image: ecs.ContainerImage.fromRegistry(config.serverImage),
-      command: [`aws:/medplum/${name}/`],
+      image: serverImage,
+      command: [config.region === 'us-east-1' ? `aws:/medplum/${name}/` : `aws:${config.region}:/medplum/${name}/`],
       logging: logDriver,
     });
 
@@ -325,14 +363,16 @@ export class BackEnd extends Construct {
     });
 
     // Grant RDS access to the fargate group
-    rdsCluster.connections.allowDefaultPortFrom(fargateSecurityGroup);
+    if (rdsCluster) {
+      rdsCluster.connections.allowDefaultPortFrom(fargateSecurityGroup);
+    }
 
     // Grant Redis access to the fargate group
     redisSecurityGroup.addIngressRule(fargateSecurityGroup, ec2.Port.tcp(6379));
 
     // Route 53
     const zone = route53.HostedZone.fromLookup(this, 'Zone', {
-      domainName: config.domainName,
+      domainName: config.domainName.split('.').slice(-2).join('.'),
     });
 
     // Route53 alias record for the load balancer
@@ -347,7 +387,7 @@ export class BackEnd extends Construct {
       tier: ssm.ParameterTier.STANDARD,
       parameterName: `/medplum/${name}/DatabaseSecrets`,
       description: 'Database secrets ARN',
-      stringValue: rdsCluster.secret?.secretArn as string,
+      stringValue: rdsSecretsArn,
     });
 
     const redisSecretsParameter = new ssm.StringParameter(this, 'RedisSecretsParameter', {

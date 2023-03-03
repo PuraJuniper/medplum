@@ -18,16 +18,15 @@ packages/definitions/dist/**/*.js
 packages/definitions/dist/**/*.js.map
 packages/definitions/dist/**/*.d.ts
 packages/examples/dist/
+packages/fhir-router/dist/
 packages/generator/dist/
 packages/generator/output/
 packages/graphiql/dist/
 packages/graphiql/public/
 packages/infra/dist/
 packages/mock/dist/
-packages/seeder/dist/
 packages/react/dist/
 packages/server/dist/
-packages/examples/dist/
 
 # Storybook output
 storybook-static/
@@ -47,3 +46,5 @@ medplum-server.tar.gz
 # Turborepo
 .turbo
 
+# Rollup
+.rollup.cache/

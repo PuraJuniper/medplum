@@ -1,8 +1,10 @@
+import { getReferenceString } from '@medplum/core';
 import { Meta, Patient } from '@medplum/fhirtypes';
 import { randomUUID } from 'crypto';
 import express from 'express';
 import request from 'supertest';
 import { initApp, shutdownApp } from '../app';
+import { registerNew } from '../auth/register';
 import { loadTestConfig } from '../config';
 import { initTestAuth } from '../test.setup';
 
@@ -108,7 +110,7 @@ describe('FHIR Routes', () => {
     expect(res.status).toBe(400);
   });
 
-  test('Create resource', async () => {
+  test('Create resource success', async () => {
     const res = await request(app)
       .post(`/fhir/R4/Patient`)
       .set('Authorization', 'Bearer ' + accessToken)
@@ -443,14 +445,6 @@ describe('FHIR Routes', () => {
     expect(res.status).toBe(200);
   });
 
-  test('Search by POST wrong content-type', async () => {
-    const res = await request(app)
-      .post(`/fhir/R4/Patient/_search`)
-      .set('Authorization', 'Bearer ' + accessToken)
-      .type('application/json');
-    expect(res.status).toBe(400);
-  });
-
   test('Validate create success', async () => {
     const res = await request(app)
       .post(`/fhir/R4/Patient/$validate`)
@@ -490,5 +484,21 @@ describe('FHIR Routes', () => {
       .set('Authorization', 'Bearer ' + accessToken)
       .send({});
     expect(res.status).toBe(403);
+  });
+
+  test('Resend as project admin', async () => {
+    const { profile, accessToken } = await registerNew({
+      firstName: 'Alice',
+      lastName: 'Smith',
+      projectName: 'Alice Project',
+      email: `alice${randomUUID()}@example.com`,
+      password: 'password!@#',
+    });
+
+    const res = await request(app)
+      .post(`/fhir/R4/${getReferenceString(profile)}/$resend`)
+      .set('Authorization', 'Bearer ' + accessToken)
+      .send({});
+    expect(res.status).toBe(200);
   });
 });

@@ -7,7 +7,7 @@ import request from 'supertest';
 import { initApp, shutdownApp } from '../app';
 import { registerNew } from '../auth/register';
 import { loadTestConfig } from '../config';
-import { setupPwnedPasswordMock, setupRecaptchaMock } from '../test.setup';
+import { addTestUser, setupPwnedPasswordMock, setupRecaptchaMock } from '../test.setup';
 
 jest.mock('@aws-sdk/client-sesv2');
 jest.mock('hibp');
@@ -79,6 +79,9 @@ describe('Project Admin routes', () => {
       .get('/admin/projects/' + project.id + '/members/' + member.id)
       .set('Authorization', 'Bearer ' + accessToken);
     expect(res4.status).toBe(200);
+    expect(res4.body.resourceType).toEqual('ProjectMembership');
+    expect(res4.body.id).toBeDefined();
+    expect(res4.body.meta.project).toEqual(project.id);
 
     // Try a naughty request using a different resource type
     const res5 = await request(app)
@@ -136,13 +139,7 @@ describe('Project Admin routes', () => {
       password: 'password!@#',
     });
 
-    const bobRegistration = await registerNew({
-      firstName: 'Bob',
-      lastName: 'Jones',
-      projectName: 'Bob Project',
-      email: `bob${randomUUID()}@example.com`,
-      password: 'password!@#',
-    });
+    const bobRegistration = await addTestUser(aliceRegistration.project, { resourceType: 'AccessPolicy' });
 
     // Try to access Alice's project using Alices's access token
     // Should succeed
@@ -152,7 +149,7 @@ describe('Project Admin routes', () => {
 
     expect(res3.status).toBe(200);
     expect(res3.body.members).toBeDefined();
-    expect(res3.body.members.length).toEqual(2);
+    expect(res3.body.members.length).toEqual(3);
     expect(res3.body.members[0].id).toBeDefined();
     expect(res3.body.members[1].id).toBeDefined();
 
@@ -211,7 +208,7 @@ describe('Project Admin routes', () => {
       .get('/fhir/R4/ClientApplication/' + clientId)
       .set('Authorization', 'Bearer ' + bobRegistration.accessToken);
 
-    expect(res8.status).toBe(404);
+    expect(res8.status).toBe(403);
 
     // Try to create a new client in Alice's project using Bob's access token
     // Should fail

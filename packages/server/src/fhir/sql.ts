@@ -1,4 +1,5 @@
 import { Client, Pool, PoolClient } from 'pg';
+import Cursor from 'pg-cursor';
 
 const DEBUG = false;
 
@@ -17,7 +18,9 @@ export enum Operator {
   LESS_THAN_OR_EQUALS = '<=',
   GREATER_THAN = '>',
   GREATER_THAN_OR_EQUALS = '>=',
+  IN = ' IN ',
   ARRAY_CONTAINS = 'ARRAY_CONTAINS',
+  TSVECTOR_MATCH = '@@',
 }
 
 export class Column {
@@ -63,20 +66,7 @@ export class Condition implements Expression {
     sql.append(' IS NOT NULL AND ');
     sql.appendColumn(this.column);
     sql.append('&&ARRAY[');
-
-    if (Array.isArray(this.parameter)) {
-      let first = true;
-      for (const value of this.parameter) {
-        if (!first) {
-          sql.append(',');
-        }
-        sql.param(value);
-        first = false;
-      }
-    } else {
-      sql.param(this.parameter);
-    }
-
+    this.appendParameters(sql, false);
     sql.append(']');
     if (this.parameterType) {
       sql.append('::' + this.parameterType);
@@ -91,6 +81,11 @@ export class Condition implements Expression {
       sql.append(')');
       sql.append(this.operator);
       sql.param((this.parameter as string).toLowerCase());
+    } else if (this.operator === Operator.TSVECTOR_MATCH) {
+      sql.appendColumn(this.column);
+      sql.append(" @@ to_tsquery('english',");
+      sql.param(this.parameter);
+      sql.append(')');
     } else if (this.operator === Operator.EQUALS && this.parameter === null) {
       sql.appendColumn(this.column);
       sql.append(' IS NULL');
@@ -100,6 +95,27 @@ export class Condition implements Expression {
     } else {
       sql.appendColumn(this.column);
       sql.append(this.operator);
+      this.appendParameters(sql, true);
+    }
+  }
+
+  private appendParameters(sql: SqlBuilder, addParens: boolean): void {
+    if (Array.isArray(this.parameter) || this.parameter instanceof Set) {
+      if (addParens) {
+        sql.append('(');
+      }
+      let first = true;
+      for (const value of this.parameter) {
+        if (!first) {
+          sql.append(',');
+        }
+        sql.param(value);
+        first = false;
+      }
+      if (addParens) {
+        sql.append(')');
+      }
+    } else {
       sql.param(this.parameter);
     }
   }
@@ -107,6 +123,15 @@ export class Condition implements Expression {
 
 export abstract class Connective implements Expression {
   constructor(readonly keyword: string, readonly expressions: Expression[]) {}
+
+  whereExpr(expression: Expression): this {
+    this.expressions.push(expression);
+    return this;
+  }
+
+  where(column: Column | string, operator?: Operator, value?: any, type?: string): this {
+    return this.whereExpr(new Condition(column, operator as Operator, value, type));
+  }
 
   buildSql(builder: SqlBuilder): void {
     if (this.expressions.length > 1) {
@@ -130,15 +155,6 @@ export class Conjunction extends Connective {
   constructor(expressions: Expression[]) {
     super(' AND ', expressions);
   }
-
-  whereExpr(expression: Expression): this {
-    this.expressions.push(expression);
-    return this;
-  }
-
-  where(column: Column | string, operator?: Operator, value?: any, type?: string): this {
-    return this.whereExpr(new Condition(column, operator as Operator, value, type));
-  }
 }
 
 export class Disjunction extends Connective {
@@ -148,7 +164,7 @@ export class Disjunction extends Connective {
 }
 
 export class Join {
-  constructor(readonly left: Column, readonly right: Column, readonly subQuery?: SelectQuery) {}
+  constructor(readonly joinName: string, readonly onExpression: Expression, readonly subQuery?: SelectQuery) {}
 }
 
 export class OrderBy {
@@ -192,13 +208,21 @@ export class SqlBuilder {
   }
 
   param(value: any): this {
-    this.#values.push(value);
-    this.#sql.push('$' + this.#values.length);
+    if (value instanceof Column) {
+      this.appendColumn(value);
+    } else {
+      this.#values.push(value);
+      this.#sql.push('$' + this.#values.length);
+    }
     return this;
   }
 
   toString(): string {
     return this.#sql.join('');
+  }
+
+  getValues(): any[] {
+    return this.#values;
   }
 
   async execute(conn: Client | Pool | PoolClient): Promise<any[]> {
@@ -276,10 +300,17 @@ export class SelectQuery extends BaseQuery {
     return `T${this.joins.length + 1}`;
   }
 
-  join(rightTableName: string, leftColumnName: string, rightColumnName: string, subQuery?: SelectQuery): this {
-    this.joins.push(
-      new Join(new Column(this.tableName, leftColumnName), new Column(rightTableName, rightColumnName), subQuery)
+  join(joinName: string, leftColumnName: string, joinColumnName: string, subQuery?: SelectQuery): this {
+    this.joinExpr(
+      joinName,
+      new Condition(new Column(this.tableName, leftColumnName), Operator.EQUALS, new Column(joinName, joinColumnName)),
+      subQuery
     );
+    return this;
+  }
+
+  joinExpr(joinName: string, onExpression: Expression, subQuery?: SelectQuery): this {
+    this.joins.push(new Join(joinName, onExpression, subQuery));
     return this;
   }
 
@@ -315,10 +346,36 @@ export class SelectQuery extends BaseQuery {
     }
   }
 
-  async execute(conn: Pool): Promise<any[]> {
+  async execute(conn: Pool | PoolClient): Promise<any[]> {
     const sql = new SqlBuilder();
     this.buildSql(sql);
     return sql.execute(conn);
+  }
+
+  async executeCursor(pool: Pool, callback: (row: any) => Promise<void>): Promise<void> {
+    const BATCH_SIZE = 100;
+
+    const sql = new SqlBuilder();
+    this.buildSql(sql);
+
+    const client = await pool.connect();
+    try {
+      const cursor = client.query(new Cursor(sql.toString(), sql.getValues()));
+      try {
+        let hasMore = true;
+        while (hasMore) {
+          const rows = await cursor.read(BATCH_SIZE);
+          for (const row of rows) {
+            await callback(row);
+          }
+          hasMore = rows.length === BATCH_SIZE;
+        }
+      } finally {
+        await cursor.close();
+      }
+    } finally {
+      client.release();
+    }
   }
 
   #buildSelect(sql: SqlBuilder): void {
@@ -345,11 +402,9 @@ export class SelectQuery extends BaseQuery {
         join.subQuery.buildSql(sql);
         sql.append(' ) ');
       }
-      sql.appendIdentifier(join.right.tableName as string);
+      sql.appendIdentifier(join.joinName);
       sql.append(' ON ');
-      sql.appendColumn(join.left);
-      sql.append('=');
-      sql.appendColumn(join.right);
+      join.onExpression.buildSql(sql);
     }
   }
 
@@ -452,7 +507,7 @@ export class InsertQuery extends BaseQuery {
 }
 
 export class DeleteQuery extends BaseQuery {
-  async execute(conn: Pool): Promise<any> {
+  async execute(conn: Pool | PoolClient): Promise<any> {
     const sql = new SqlBuilder();
     sql.append('DELETE FROM ');
     sql.appendIdentifier(this.tableName);

@@ -2,7 +2,7 @@ import { Avatar, createStyles, Group, Header, Menu, Stack, Text, UnstyledButton 
 import { formatHumanName, getReferenceString, MEDPLUM_VERSION, ProfileResource } from '@medplum/core';
 import { HumanName } from '@medplum/fhirtypes';
 import { HumanNameDisplay, Logo, ResourceAvatar, useMedplumContext } from '@medplum/react';
-import { IconChevronDown, IconLogout, IconSettings, IconSwitchHorizontal } from '@tabler/icons';
+import { IconChevronDown, IconLogout, IconSettings, IconSwitchHorizontal } from '@tabler/icons-react';
 import React, { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { HeaderSearchInput } from './components/HeaderSearchInput';
@@ -144,8 +144,8 @@ export function AppHeader({ navbarToggle }: AppHeaderProps): JSX.Element {
             </Menu.Item>
             <Menu.Item
               icon={<IconLogout size={14} stroke={1.5} />}
-              onClick={() => {
-                medplum.signOut();
+              onClick={async () => {
+                await medplum.signOut();
                 navigate('/signin');
               }}
             >

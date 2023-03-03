@@ -137,6 +137,25 @@ export function badRequest(details: string, expression?: string): OperationOutco
   };
 }
 
+export function validationError(details: string): OperationOutcome {
+  return {
+    resourceType: 'OperationOutcome',
+    issue: [
+      {
+        severity: 'error',
+        code: 'structure',
+        details: {
+          text: details,
+        },
+      },
+    ],
+  };
+}
+
+export function isOperationOutcome(value: unknown): value is OperationOutcome {
+  return typeof value === 'object' && value !== null && (value as any).resourceType === 'OperationOutcome';
+}
+
 export function isOk(outcome: OperationOutcome): boolean {
   return outcome.id === OK_ID || outcome.id === CREATED_ID || outcome.id === NOT_MODIFIED_ID;
 }
@@ -185,10 +204,26 @@ export function assertOk<T>(outcome: OperationOutcome, resource: T | undefined):
 export class OperationOutcomeError extends Error {
   readonly outcome: OperationOutcome;
 
-  constructor(outcome: OperationOutcome) {
+  constructor(outcome: OperationOutcome, cause?: unknown) {
     super(outcome?.issue?.[0].details?.text);
     this.outcome = outcome;
+    this.cause = cause;
   }
+}
+
+/**
+ * Normalizes an error object into an OperationOutcome.
+ * @param error The error value which could be a string, Error, OperationOutcome, or other unknown type.
+ * @returns The normalized OperationOutcome.
+ */
+export function normalizeOperationOutcome(error: unknown): OperationOutcome {
+  if (error instanceof OperationOutcomeError) {
+    return error.outcome;
+  }
+  if (isOperationOutcome(error)) {
+    return error;
+  }
+  return badRequest(normalizeErrorString(error));
 }
 
 /**
@@ -206,9 +241,8 @@ export function normalizeErrorString(error: unknown): string {
   if (error instanceof Error) {
     return error.message;
   }
-  if (typeof error === 'object' && 'resourceType' in error) {
-    const outcome = error as OperationOutcome;
-    return outcome.issue?.[0]?.details?.text ?? 'Unknown error';
+  if (isOperationOutcome(error)) {
+    return error.issue?.[0]?.details?.text ?? 'Unknown error';
   }
   return JSON.stringify(error);
 }

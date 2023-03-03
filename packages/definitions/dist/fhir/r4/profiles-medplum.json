@@ -16,6 +16,7 @@
       "kind" : "resource",
       "abstract" : false,
       "type" : "Project",
+      "baseDefinition" : "http://hl7.org/fhir/StructureDefinition/DomainResource",
       "snapshot" : {
         "element" : [
           {
@@ -33,6 +34,11 @@
             "definition" : "The logical id of the resource, as used in the URL for the resource. Once assigned, this value never changes.",
             "min" : 0,
             "max" : "1",
+            "base" : {
+              "path" : "Resource.id",
+              "min" : 0,
+              "max" : "1"
+            },
             "type" : [{
               "code" : "string"
             }]
@@ -43,6 +49,11 @@
             "definition" : "The metadata about the resource. This is content that is maintained by the infrastructure. Changes to the content might not always be associated with version changes to the resource.",
             "min" : 0,
             "max" : "1",
+            "base" : {
+              "path" : "Resource.meta",
+              "min" : 0,
+              "max" : "1"
+            },
             "type" : [{
               "code" : "Meta"
             }]
@@ -53,6 +64,11 @@
             "definition" : "A reference to a set of rules that were followed when the resource was constructed, and which must be understood when processing the content. Often, this is a reference to an implementation guide that defines the special rules along with other profiles etc.",
             "min" : 0,
             "max" : "1",
+            "base" : {
+              "path" : "Resource.implicitRules",
+              "min" : 0,
+              "max" : "1"
+            },
             "type" : [{
               "code" : "uri"
             }]
@@ -63,6 +79,11 @@
             "definition" : "The base language in which the resource is written.",
             "min" : 0,
             "max" : "1",
+            "base" : {
+              "path" : "Resource.language",
+              "min" : 0,
+              "max" : "1"
+            },
             "type" : [{
               "code" : "code"
             }]
@@ -276,6 +297,7 @@
       "kind" : "resource",
       "abstract" : false,
       "type" : "ClientApplication",
+      "baseDefinition" : "http://hl7.org/fhir/StructureDefinition/DomainResource",
       "snapshot" : {
         "element" : [
           {
@@ -293,6 +315,11 @@
             "definition" : "The logical id of the resource, as used in the URL for the resource. Once assigned, this value never changes.",
             "min" : 0,
             "max" : "1",
+            "base" : {
+              "path" : "Resource.id",
+              "min" : 0,
+              "max" : "1"
+            },
             "type" : [{
               "code" : "string"
             }]
@@ -303,6 +330,11 @@
             "definition" : "The metadata about the resource. This is content that is maintained by the infrastructure. Changes to the content might not always be associated with version changes to the resource.",
             "min" : 0,
             "max" : "1",
+            "base" : {
+              "path" : "Resource.meta",
+              "min" : 0,
+              "max" : "1"
+            },
             "type" : [{
               "code" : "Meta"
             }]
@@ -313,6 +345,11 @@
             "definition" : "A reference to a set of rules that were followed when the resource was constructed, and which must be understood when processing the content. Often, this is a reference to an implementation guide that defines the special rules along with other profiles etc.",
             "min" : 0,
             "max" : "1",
+            "base" : {
+              "path" : "Resource.implicitRules",
+              "min" : 0,
+              "max" : "1"
+            },
             "type" : [{
               "code" : "uri"
             }]
@@ -323,6 +360,11 @@
             "definition" : "The base language in which the resource is written.",
             "min" : 0,
             "max" : "1",
+            "base" : {
+              "path" : "Resource.language",
+              "min" : 0,
+              "max" : "1"
+            },
             "type" : [{
               "code" : "code"
             }]
@@ -386,6 +428,26 @@
             "type" : [{
               "code" : "uri"
             }]
+          },
+          {
+            "id" : "ClientApplication.pkceOptional",
+            "path" : "ClientApplication.pkceOptional",
+            "definition" : "Flag to make PKCE optional for this client application. PKCE is required by default for compliance with Smart App Launch. It can be disabled for compatibility with legacy client applications.",
+            "min" : 0,
+            "max" : "1",
+            "type" : [{
+              "code" : "boolean"
+            }]
+          },
+          {
+            "id" : "ClientApplication.identityProvider",
+            "path" : "ClientApplication.identityProvider",
+            "definition" : "Optional external Identity Provider (IdP) for the client application.",
+            "min" : 0,
+            "max" : "1",
+            "type" : [{
+              "code" : "IdentityProvider"
+            }]
           }
         ]
       }
@@ -402,6 +464,7 @@
       "kind" : "resource",
       "abstract" : false,
       "type" : "User",
+      "baseDefinition" : "http://hl7.org/fhir/StructureDefinition/DomainResource",
       "description" : "Representation of a human user of the system.",
       "snapshot" : {
         "element" : [
@@ -420,6 +483,11 @@
             "definition" : "The logical id of the resource, as used in the URL for the resource. Once assigned, this value never changes.",
             "min" : 0,
             "max" : "1",
+            "base" : {
+              "path" : "Resource.id",
+              "min" : 0,
+              "max" : "1"
+            },
             "type" : [{
               "code" : "string"
             }]
@@ -430,6 +498,11 @@
             "definition" : "The metadata about the resource. This is content that is maintained by the infrastructure. Changes to the content might not always be associated with version changes to the resource.",
             "min" : 0,
             "max" : "1",
+            "base" : {
+              "path" : "Resource.meta",
+              "min" : 0,
+              "max" : "1"
+            },
             "type" : [{
               "code" : "Meta"
             }]
@@ -440,6 +513,11 @@
             "definition" : "A reference to a set of rules that were followed when the resource was constructed, and which must be understood when processing the content. Often, this is a reference to an implementation guide that defines the special rules along with other profiles etc.",
             "min" : 0,
             "max" : "1",
+            "base" : {
+              "path" : "Resource.implicitRules",
+              "min" : 0,
+              "max" : "1"
+            },
             "type" : [{
               "code" : "uri"
             }]
@@ -450,6 +528,11 @@
             "definition" : "The base language in which the resource is written.",
             "min" : 0,
             "max" : "1",
+            "base" : {
+              "path" : "Resource.language",
+              "min" : 0,
+              "max" : "1"
+            },
             "type" : [{
               "code" : "code"
             }]
@@ -475,10 +558,20 @@
             }]
           },
           {
+            "id" : "User.externalId",
+            "path" : "User.externalId",
+            "definition" : "A String that is an identifier for the resource as defined by the provisioning client.  The \"externalId\" may simplify identification of a resource between the provisioning client and the service provider by allowing the client to use a filter to locate the resource with an identifier from the provisioning domain, obviating the need to store a local mapping between the provisioning domain's identifier of the resource and the identifier used by the service provider.  Each resource MAY include a non-empty \"externalId\" value.  The value of the \"externalId\" attribute is always issued by the provisioning client and MUST NOT be specified by the service provider.  The service provider MUST always interpret the externalId as scoped to the provisioning domain.",
+            "min" : 0,
+            "max" : "1",
+            "type" : [{
+              "code" : "string"
+            }]
+          },
+          {
             "id" : "User.email",
             "path" : "User.email",
             "definition" : "The email address that uniquely identifies the user.",
-            "min" : 1,
+            "min" : 0,
             "max" : "1",
             "type" : [{
               "code" : "string"
@@ -516,6 +609,26 @@
             }]
           },
           {
+            "id" : "User.mfaSecret",
+            "path" : "User.mfaSecret",
+            "definition" : "Shared secret for MFA authenticator applications.",
+            "min" : 0,
+            "max" : "1",
+            "type" : [{
+              "code" : "string"
+            }]
+          },
+          {
+            "id" : "User.mfaEnrolled",
+            "path" : "User.mfaEnrolled",
+            "definition" : "Whether the user has completed MFA enrollment.",
+            "min" : 0,
+            "max" : "1",
+            "type" : [{
+              "code" : "boolean"
+            }]
+          },
+          {
             "id" : "User.project",
             "path" : "User.project",
             "definition" : "Optional project if the user only exists for the project. This is used for the project-specific user database.",
@@ -541,6 +654,7 @@
       "kind" : "resource",
       "abstract" : false,
       "type" : "ProjectMembership",
+      "baseDefinition" : "http://hl7.org/fhir/StructureDefinition/DomainResource",
       "description" : "Medplum project membership. A project membership grants a user access to a project.",
       "snapshot" : {
         "element" : [
@@ -559,6 +673,11 @@
             "definition" : "The logical id of the resource, as used in the URL for the resource. Once assigned, this value never changes.",
             "min" : 0,
             "max" : "1",
+            "base" : {
+              "path" : "Resource.id",
+              "min" : 0,
+              "max" : "1"
+            },
             "type" : [{
               "code" : "string"
             }]
@@ -569,6 +688,11 @@
             "definition" : "The metadata about the resource. This is content that is maintained by the infrastructure. Changes to the content might not always be associated with version changes to the resource.",
             "min" : 0,
             "max" : "1",
+            "base" : {
+              "path" : "Resource.meta",
+              "min" : 0,
+              "max" : "1"
+            },
             "type" : [{
               "code" : "Meta"
             }]
@@ -579,6 +703,11 @@
             "definition" : "A reference to a set of rules that were followed when the resource was constructed, and which must be understood when processing the content. Often, this is a reference to an implementation guide that defines the special rules along with other profiles etc.",
             "min" : 0,
             "max" : "1",
+            "base" : {
+              "path" : "Resource.implicitRules",
+              "min" : 0,
+              "max" : "1"
+            },
             "type" : [{
               "code" : "uri"
             }]
@@ -589,6 +718,11 @@
             "definition" : "The base language in which the resource is written.",
             "min" : 0,
             "max" : "1",
+            "base" : {
+              "path" : "Resource.language",
+              "min" : 0,
+              "max" : "1"
+            },
             "type" : [{
               "code" : "code"
             }]
@@ -602,6 +736,17 @@
             "type" : [{
               "code" : "Reference",
               "targetProfile" : ["https://medplum.com/fhir/StructureDefinition/Project"]
+            }]
+          },
+          {
+            "id" : "ProjectMembership.invitedBy",
+            "path" : "ProjectMembership.invitedBy",
+            "definition" : "The project administrator who invited the user to the project.",
+            "min" : 0,
+            "max" : "1",
+            "type" : [{
+              "code" : "Reference",
+              "targetProfile" : ["https://medplum.com/fhir/StructureDefinition/User"]
             }]
           },
           {
@@ -644,6 +789,64 @@
             }]
           },
           {
+            "id" : "ProjectMembership.access",
+            "path" : "ProjectMembership.access",
+            "definition" : "Extended access configuration using parameterized access policies.",
+            "min" : 0,
+            "max" : "*",
+            "type" : [{
+              "code" : "BackboneElement"
+            }]
+          },
+          {
+            "id" : "ProjectMembership.access.policy",
+            "path" : "ProjectMembership.access.policy",
+            "definition" : "The base access policy used as a template.  Variables in the template access policy are replaced by the values in the parameter.",
+            "min" : 1,
+            "max" : "1",
+            "type" : [
+              {
+                "code" : "Reference",
+                "targetProfile" : ["https://medplum.com/fhir/StructureDefinition/AccessPolicy"]
+              }
+            ]
+          },
+          {
+            "id" : "ProjectMembership.access.parameter",
+            "path" : "ProjectMembership.access.parameter",
+            "definition" : "User options that control the display of the application.",
+            "min" : 0,
+            "max" : "*",
+            "type" : [{
+              "code" : "BackboneElement"
+            }]
+          },
+          {
+            "id" : "ProjectMembership.access.parameter.name",
+            "path" : "ProjectMembership.access.parameter.name",
+            "definition" : "The unique name of the parameter.",
+            "min" : 1,
+            "max" : "1",
+            "type" : [{
+              "code" : "code"
+            }]
+          },
+          {
+            "id" : "ProjectMembership.access.parameter.value[x]",
+            "path" : "ProjectMembership.access.parameter.value[x]",
+            "short" : "Value of the parameter.",
+            "definition" : "Value of the parameter - must be one of a constrained set of the data types (see [Extensibility](extensibility.html) for a list).",
+            "min" : 1,
+            "max" : "1",
+            "type" : [
+            {
+              "code" : "string"
+            },
+            {
+              "code" : "Reference"
+            }]
+          },
+          {
             "id" : "ProjectMembership.userConfiguration",
             "path" : "ProjectMembership.userConfiguration",
             "definition" : "The user configuration for the user within the project memebership such as menu links, saved searches, and features.",
@@ -680,6 +883,7 @@
       "kind" : "resource",
       "abstract" : false,
       "type" : "Bot",
+      "baseDefinition" : "http://hl7.org/fhir/StructureDefinition/DomainResource",
       "description" : "Bot account for automated actions.",
       "snapshot" : {
         "element" : [
@@ -698,6 +902,11 @@
             "definition" : "The logical id of the resource, as used in the URL for the resource. Once assigned, this value never changes.",
             "min" : 0,
             "max" : "1",
+            "base" : {
+              "path" : "Resource.id",
+              "min" : 0,
+              "max" : "1"
+            },
             "type" : [{
               "code" : "string"
             }]
@@ -708,6 +917,11 @@
             "definition" : "The metadata about the resource. This is content that is maintained by the infrastructure. Changes to the content might not always be associated with version changes to the resource.",
             "min" : 0,
             "max" : "1",
+            "base" : {
+              "path" : "Resource.meta",
+              "min" : 0,
+              "max" : "1"
+            },
             "type" : [{
               "code" : "Meta"
             }]
@@ -718,6 +932,11 @@
             "definition" : "A reference to a set of rules that were followed when the resource was constructed, and which must be understood when processing the content. Often, this is a reference to an implementation guide that defines the special rules along with other profiles etc.",
             "min" : 0,
             "max" : "1",
+            "base" : {
+              "path" : "Resource.implicitRules",
+              "min" : 0,
+              "max" : "1"
+            },
             "type" : [{
               "code" : "uri"
             }]
@@ -728,8 +947,24 @@
             "definition" : "The base language in which the resource is written.",
             "min" : 0,
             "max" : "1",
+            "base" : {
+              "path" : "Resource.language",
+              "min" : 0,
+              "max" : "1"
+            },
             "type" : [{
               "code" : "code"
+            }]
+          },
+          {
+            "id" : "Bot.identifier",
+            "path" : "Bot.identifier",
+            "short" : "An identifier for this bot",
+            "definition" : "An identifier for this bot.",
+            "min" : 0,
+            "max" : "*",
+            "type" : [{
+              "code" : "Identifier"
             }]
           },
           {
@@ -807,6 +1042,7 @@
       "kind" : "resource",
       "abstract" : false,
       "type" : "Login",
+      "baseDefinition" : "http://hl7.org/fhir/StructureDefinition/DomainResource",
       "description" : "Login event and session details.",
       "snapshot" : {
         "element" : [
@@ -825,6 +1061,11 @@
             "definition" : "The logical id of the resource, as used in the URL for the resource. Once assigned, this value never changes.",
             "min" : 0,
             "max" : "1",
+            "base" : {
+              "path" : "Resource.id",
+              "min" : 0,
+              "max" : "1"
+            },
             "type" : [{
               "code" : "string"
             }]
@@ -835,6 +1076,11 @@
             "definition" : "The metadata about the resource. This is content that is maintained by the infrastructure. Changes to the content might not always be associated with version changes to the resource.",
             "min" : 0,
             "max" : "1",
+            "base" : {
+              "path" : "Resource.meta",
+              "min" : 0,
+              "max" : "1"
+            },
             "type" : [{
               "code" : "Meta"
             }]
@@ -845,6 +1091,11 @@
             "definition" : "A reference to a set of rules that were followed when the resource was constructed, and which must be understood when processing the content. Often, this is a reference to an implementation guide that defines the special rules along with other profiles etc.",
             "min" : 0,
             "max" : "1",
+            "base" : {
+              "path" : "Resource.implicitRules",
+              "min" : 0,
+              "max" : "1"
+            },
             "type" : [{
               "code" : "uri"
             }]
@@ -855,6 +1106,11 @@
             "definition" : "The base language in which the resource is written.",
             "min" : 0,
             "max" : "1",
+            "base" : {
+              "path" : "Resource.language",
+              "min" : 0,
+              "max" : "1"
+            },
             "type" : [{
               "code" : "code"
             }]
@@ -868,6 +1124,31 @@
             "type" : [{
               "code" : "Reference",
               "targetProfile" : ["https://medplum.com/fhir/StructureDefinition/ClientApplication"]
+            }]
+          },
+          {
+            "id" : "Login.profileType",
+            "path" : "Login.profileType",
+            "definition" : "Optional required profile resource type.",
+            "min" : 0,
+            "max" : "1",
+            "type" : [{
+              "code" : "code"
+            }],
+            "binding" : {
+              "strength" : "required",
+              "valueSet" : "http://hl7.org/fhir/ValueSet/resource-types|4.0.1"
+            }
+          },
+          {
+            "id" : "Login.project",
+            "path" : "Login.project",
+            "definition" : "Optional required project for the login.",
+            "min" : 0,
+            "max" : "1",
+            "type" : [{
+              "code" : "Reference",
+              "targetProfile" : ["https://medplum.com/fhir/StructureDefinition/Project"]
             }]
           },
           {
@@ -985,6 +1266,16 @@
             }]
           },
           {
+            "id" : "Login.mfaVerified",
+            "path" : "Login.mfaVerified",
+            "definition" : "Whether the user has verified using multi-factor authentication (MFA). This will only be set is the user has MFA enabled (see User.mfaEnrolled).",
+            "min" : 0,
+            "max" : "1",
+            "type" : [{
+              "code" : "boolean"
+            }]
+          },
+          {
             "id" : "Login.granted",
             "path" : "Login.granted",
             "definition" : "Whether a token has been granted for this login.",
@@ -1070,6 +1361,7 @@
       "kind" : "resource",
       "abstract" : false,
       "type" : "PasswordChangeRequest",
+      "baseDefinition" : "http://hl7.org/fhir/StructureDefinition/DomainResource",
       "description" : "Password change request for the 'forgot password' flow.",
       "snapshot" : {
         "element" : [
@@ -1088,6 +1380,11 @@
             "definition" : "The logical id of the resource, as used in the URL for the resource. Once assigned, this value never changes.",
             "min" : 0,
             "max" : "1",
+            "base" : {
+              "path" : "Resource.id",
+              "min" : 0,
+              "max" : "1"
+            },
             "type" : [{
               "code" : "string"
             }]
@@ -1098,6 +1395,11 @@
             "definition" : "The metadata about the resource. This is content that is maintained by the infrastructure. Changes to the content might not always be associated with version changes to the resource.",
             "min" : 0,
             "max" : "1",
+            "base" : {
+              "path" : "Resource.meta",
+              "min" : 0,
+              "max" : "1"
+            },
             "type" : [{
               "code" : "Meta"
             }]
@@ -1108,6 +1410,11 @@
             "definition" : "A reference to a set of rules that were followed when the resource was constructed, and which must be understood when processing the content. Often, this is a reference to an implementation guide that defines the special rules along with other profiles etc.",
             "min" : 0,
             "max" : "1",
+            "base" : {
+              "path" : "Resource.implicitRules",
+              "min" : 0,
+              "max" : "1"
+            },
             "type" : [{
               "code" : "uri"
             }]
@@ -1118,6 +1425,11 @@
             "definition" : "The base language in which the resource is written.",
             "min" : 0,
             "max" : "1",
+            "base" : {
+              "path" : "Resource.language",
+              "min" : 0,
+              "max" : "1"
+            },
             "type" : [{
               "code" : "code"
             }]
@@ -1178,6 +1490,7 @@
       "kind" : "resource",
       "abstract" : false,
       "type" : "JsonWebKey",
+      "baseDefinition" : "http://hl7.org/fhir/StructureDefinition/DomainResource",
       "description" : "A JSON object that represents a cryptographic key. The members of the object represent properties of the key, including its value.",
       "snapshot" : {
         "element" : [
@@ -1196,6 +1509,11 @@
             "definition" : "The logical id of the resource, as used in the URL for the resource. Once assigned, this value never changes.",
             "min" : 0,
             "max" : "1",
+            "base" : {
+              "path" : "Resource.id",
+              "min" : 0,
+              "max" : "1"
+            },
             "type" : [{
               "code" : "string"
             }]
@@ -1206,6 +1524,11 @@
             "definition" : "The metadata about the resource. This is content that is maintained by the infrastructure. Changes to the content might not always be associated with version changes to the resource.",
             "min" : 0,
             "max" : "1",
+            "base" : {
+              "path" : "Resource.meta",
+              "min" : 0,
+              "max" : "1"
+            },
             "type" : [{
               "code" : "Meta"
             }]
@@ -1216,6 +1539,11 @@
             "definition" : "A reference to a set of rules that were followed when the resource was constructed, and which must be understood when processing the content. Often, this is a reference to an implementation guide that defines the special rules along with other profiles etc.",
             "min" : 0,
             "max" : "1",
+            "base" : {
+              "path" : "Resource.implicitRules",
+              "min" : 0,
+              "max" : "1"
+            },
             "type" : [{
               "code" : "uri"
             }]
@@ -1226,6 +1554,11 @@
             "definition" : "The base language in which the resource is written.",
             "min" : 0,
             "max" : "1",
+            "base" : {
+              "path" : "Resource.language",
+              "min" : 0,
+              "max" : "1"
+            },
             "type" : [{
               "code" : "code"
             }]
@@ -1437,6 +1770,7 @@
       "kind" : "resource",
       "abstract" : false,
       "type" : "AccessPolicy",
+      "baseDefinition" : "http://hl7.org/fhir/StructureDefinition/DomainResource",
       "description" : "Access Policy for user or user group that defines how entities can or cannot access resources.",
       "snapshot" : {
         "element" : [
@@ -1455,6 +1789,11 @@
             "definition" : "The logical id of the resource, as used in the URL for the resource. Once assigned, this value never changes.",
             "min" : 0,
             "max" : "1",
+            "base" : {
+              "path" : "Resource.id",
+              "min" : 0,
+              "max" : "1"
+            },
             "type" : [{
               "code" : "string"
             }]
@@ -1465,6 +1804,11 @@
             "definition" : "The metadata about the resource. This is content that is maintained by the infrastructure. Changes to the content might not always be associated with version changes to the resource.",
             "min" : 0,
             "max" : "1",
+            "base" : {
+              "path" : "Resource.meta",
+              "min" : 0,
+              "max" : "1"
+            },
             "type" : [{
               "code" : "Meta"
             }]
@@ -1475,6 +1819,11 @@
             "definition" : "A reference to a set of rules that were followed when the resource was constructed, and which must be understood when processing the content. Often, this is a reference to an implementation guide that defines the special rules along with other profiles etc.",
             "min" : 0,
             "max" : "1",
+            "base" : {
+              "path" : "Resource.implicitRules",
+              "min" : 0,
+              "max" : "1"
+            },
             "type" : [{
               "code" : "uri"
             }]
@@ -1485,6 +1834,11 @@
             "definition" : "The base language in which the resource is written.",
             "min" : 0,
             "max" : "1",
+            "base" : {
+              "path" : "Resource.language",
+              "min" : 0,
+              "max" : "1"
+            },
             "type" : [{
               "code" : "code"
             }]
@@ -1579,6 +1933,46 @@
             "type" : [{
               "code" : "string"
             }]
+          },
+          {
+            "id" : "AccessPolicy.ipAccessRule",
+            "path" : "AccessPolicy.ipAccessRule",
+            "definition" : "Use IP Access Rules to allowlist, block, and challenge traffic based on the visitor IP address.",
+            "min" : 0,
+            "max" : "*",
+            "type" : [{
+              "code" : "BackboneElement"
+            }]
+          },
+          {
+            "id" : "AccessPolicy.ipAccessRule.name",
+            "path" : "AccessPolicy.ipAccessRule.name",
+            "definition" : "Friendly name that will make it easy for you to identify the IP Access Rule in the future.",
+            "min" : 0,
+            "max" : "1",
+            "type" : [{
+              "code" : "string"
+            }]
+          },
+          {
+            "id" : "AccessPolicy.ipAccessRule.value",
+            "path" : "AccessPolicy.ipAccessRule.value",
+            "definition" : "An IP Access rule will apply a certain action to incoming traffic based on the visitor IP address or IP range.",
+            "min" : 1,
+            "max" : "1",
+            "type" : [{
+              "code" : "string"
+            }]
+          },
+          {
+            "id" : "AccessPolicy.ipAccessRule.action",
+            "path" : "AccessPolicy.ipAccessRule.action",
+            "definition" : "Access rule can perform one of the following actions: \"allow\" | \"block\".",
+            "min" : 1,
+            "max" : "1",
+            "type" : [{
+              "code" : "string"
+            }]
           }
         ]
       }
@@ -1595,6 +1989,7 @@
       "kind" : "resource",
       "abstract" : false,
       "type" : "UserConfiguration",
+      "baseDefinition" : "http://hl7.org/fhir/StructureDefinition/DomainResource",
       "description" : "User specific configuration for the Medplum application.",
       "snapshot" : {
         "element" : [
@@ -1613,6 +2008,11 @@
             "definition" : "The logical id of the resource, as used in the URL for the resource. Once assigned, this value never changes.",
             "min" : 0,
             "max" : "1",
+            "base" : {
+              "path" : "Resource.id",
+              "min" : 0,
+              "max" : "1"
+            },
             "type" : [{
               "code" : "string"
             }]
@@ -1623,6 +2023,11 @@
             "definition" : "The metadata about the resource. This is content that is maintained by the infrastructure. Changes to the content might not always be associated with version changes to the resource.",
             "min" : 0,
             "max" : "1",
+            "base" : {
+              "path" : "Resource.meta",
+              "min" : 0,
+              "max" : "1"
+            },
             "type" : [{
               "code" : "Meta"
             }]
@@ -1633,6 +2038,11 @@
             "definition" : "A reference to a set of rules that were followed when the resource was constructed, and which must be understood when processing the content. Often, this is a reference to an implementation guide that defines the special rules along with other profiles etc.",
             "min" : 0,
             "max" : "1",
+            "base" : {
+              "path" : "Resource.implicitRules",
+              "min" : 0,
+              "max" : "1"
+            },
             "type" : [{
               "code" : "uri"
             }]
@@ -1643,6 +2053,11 @@
             "definition" : "The base language in which the resource is written.",
             "min" : 0,
             "max" : "1",
+            "base" : {
+              "path" : "Resource.language",
+              "min" : 0,
+              "max" : "1"
+            },
             "type" : [{
               "code" : "code"
             }]
@@ -1797,6 +2212,7 @@
       "kind" : "resource",
       "abstract" : false,
       "type" : "BulkDataExport",
+      "baseDefinition" : "http://hl7.org/fhir/StructureDefinition/DomainResource",
       "description" : "User specific configuration for the Medplum application.",
       "snapshot" : {
         "element" : [
@@ -1815,6 +2231,11 @@
             "definition" : "The logical id of the resource, as used in the URL for the resource. Once assigned, this value never changes.",
             "min" : 0,
             "max" : "1",
+            "base" : {
+              "path" : "Resource.id",
+              "min" : 0,
+              "max" : "1"
+            },
             "type" : [{
               "code" : "string"
             }]
@@ -1825,6 +2246,11 @@
             "definition" : "The metadata about the resource. This is content that is maintained by the infrastructure. Changes to the content might not always be associated with version changes to the resource.",
             "min" : 0,
             "max" : "1",
+            "base" : {
+              "path" : "Resource.meta",
+              "min" : 0,
+              "max" : "1"
+            },
             "type" : [{
               "code" : "Meta"
             }]
@@ -1835,6 +2261,11 @@
             "definition" : "A reference to a set of rules that were followed when the resource was constructed, and which must be understood when processing the content. Often, this is a reference to an implementation guide that defines the special rules along with other profiles etc.",
             "min" : 0,
             "max" : "1",
+            "base" : {
+              "path" : "Resource.implicitRules",
+              "min" : 0,
+              "max" : "1"
+            },
             "type" : [{
               "code" : "uri"
             }]
@@ -1845,6 +2276,11 @@
             "definition" : "The base language in which the resource is written.",
             "min" : 0,
             "max" : "1",
+            "base" : {
+              "path" : "Resource.language",
+              "min" : 0,
+              "max" : "1"
+            },
             "type" : [{
               "code" : "code"
             }]
@@ -2049,14 +2485,15 @@
       "kind" : "resource",
       "abstract" : false,
       "type" : "SmartAppLaunch",
-      "description" : "User specific configuration for the Medplum application.",
+      "baseDefinition" : "http://hl7.org/fhir/StructureDefinition/DomainResource",
+      "description" : "This resource contains context details for a SMART App Launch.",
       "snapshot" : {
         "element" : [
           {
             "id" : "SmartAppLaunch",
             "path" : "SmartAppLaunch",
-            "short" : "User specific configuration for the Medplum application.",
-            "definition" : "User specific configuration for the Medplum application.",
+            "short" : "This resource contains context details for a SMART App Launch.",
+            "definition" : "This resource contains context details for a SMART App Launch.",
             "min" : 0,
             "max" : "*"
           },
@@ -2067,6 +2504,11 @@
             "definition" : "The logical id of the resource, as used in the URL for the resource. Once assigned, this value never changes.",
             "min" : 0,
             "max" : "1",
+            "base" : {
+              "path" : "Resource.id",
+              "min" : 0,
+              "max" : "1"
+            },
             "type" : [{
               "code" : "string"
             }]
@@ -2077,6 +2519,11 @@
             "definition" : "The metadata about the resource. This is content that is maintained by the infrastructure. Changes to the content might not always be associated with version changes to the resource.",
             "min" : 0,
             "max" : "1",
+            "base" : {
+              "path" : "Resource.meta",
+              "min" : 0,
+              "max" : "1"
+            },
             "type" : [{
               "code" : "Meta"
             }]
@@ -2087,6 +2534,11 @@
             "definition" : "A reference to a set of rules that were followed when the resource was constructed, and which must be understood when processing the content. Often, this is a reference to an implementation guide that defines the special rules along with other profiles etc.",
             "min" : 0,
             "max" : "1",
+            "base" : {
+              "path" : "Resource.implicitRules",
+              "min" : 0,
+              "max" : "1"
+            },
             "type" : [{
               "code" : "uri"
             }]
@@ -2121,6 +2573,197 @@
             "type" : [{
               "code" : "Reference",
               "targetProfile" : ["http://hl7.org/fhir/StructureDefinition/Encounter"]
+            }]
+          }
+        ]
+      }
+    }
+  },
+  {
+    "fullUrl" : "https://medplum.com/fhir/StructureDefinition/DomainConfiguration",
+    "resource" : {
+      "resourceType" : "StructureDefinition",
+      "id" : "DomainConfiguration",
+      "name" : "DomainConfiguration",
+      "url" : "https://medplum.com/fhir/StructureDefinition/DomainConfiguration",
+      "status" : "active",
+      "kind" : "resource",
+      "abstract" : false,
+      "type" : "DomainConfiguration",
+      "baseDefinition" : "http://hl7.org/fhir/StructureDefinition/DomainResource",
+      "description" : "Domain specific configuration for the Medplum application.",
+      "snapshot" : {
+        "element" : [
+          {
+            "id" : "DomainConfiguration",
+            "path" : "DomainConfiguration",
+            "short" : "Domain specific configuration for the Medplum application.",
+            "definition" : "Domain specific configuration for the Medplum application.",
+            "min" : 0,
+            "max" : "*"
+          },
+          {
+            "id" : "DomainConfiguration.id",
+            "path" : "DomainConfiguration.id",
+            "short" : "Logical id of this artifact",
+            "definition" : "The logical id of the resource, as used in the URL for the resource. Once assigned, this value never changes.",
+            "min" : 0,
+            "max" : "1",
+            "base" : {
+              "path" : "Resource.id",
+              "min" : 0,
+              "max" : "1"
+            },
+            "type" : [{
+              "code" : "string"
+            }]
+          },
+          {
+            "id" : "DomainConfiguration.meta",
+            "path" : "DomainConfiguration.meta",
+            "definition" : "The metadata about the resource. This is content that is maintained by the infrastructure. Changes to the content might not always be associated with version changes to the resource.",
+            "min" : 0,
+            "max" : "1",
+            "base" : {
+              "path" : "Resource.meta",
+              "min" : 0,
+              "max" : "1"
+            },
+            "type" : [{
+              "code" : "Meta"
+            }]
+          },
+          {
+            "id" : "DomainConfiguration.implicitRules",
+            "path" : "DomainConfiguration.implicitRules",
+            "definition" : "A reference to a set of rules that were followed when the resource was constructed, and which must be understood when processing the content. Often, this is a reference to an implementation guide that defines the special rules along with other profiles etc.",
+            "min" : 0,
+            "max" : "1",
+            "base" : {
+              "path" : "Resource.implicitRules",
+              "min" : 0,
+              "max" : "1"
+            },
+            "type" : [{
+              "code" : "uri"
+            }]
+          },
+          {
+            "id" : "DomainConfiguration.language",
+            "path" : "DomainConfiguration.language",
+            "definition" : "The base language in which the resource is written.",
+            "min" : 0,
+            "max" : "1",
+            "type" : [{
+              "code" : "code"
+            }]
+          },
+          {
+            "id" : "DomainConfiguration.domain",
+            "path" : "DomainConfiguration.domain",
+            "definition" : "Globally unique domain name for this configuration.",
+            "min" : 1,
+            "max" : "1",
+            "type" : [{
+              "code" : "uri"
+            }]
+          },
+          {
+            "id" : "DomainConfiguration.identityProvider",
+            "path" : "DomainConfiguration.identityProvider",
+            "definition" : "Optional external Identity Provider (IdP) for the domain name.",
+            "min" : 0,
+            "max" : "1",
+            "type" : [{
+              "code" : "IdentityProvider"
+            }]
+          }
+        ]
+      }
+    }
+  },
+  {
+    "fullUrl" : "https://medplum.com/fhir/StructureDefinition/IdentityProvider",
+    "resource" : {
+      "resourceType" : "StructureDefinition",
+      "id" : "IdentityProvider",
+      "name" : "IdentityProvider",
+      "url" : "https://medplum.com/fhir/StructureDefinition/IdentityProvider",
+      "status" : "active",
+      "kind" : "complex-type",
+      "abstract" : false,
+      "type" : "IdentityProvider",
+      "baseDefinition" : "http://hl7.org/fhir/StructureDefinition/Element",
+      "description" : "External Identity Provider (IdP) configuration details.",
+      "snapshot" : {
+        "element" : [
+          {
+            "id" : "IdentityProvider",
+            "path" : "IdentityProvider",
+            "short" : "External Identity Provider (IdP) configuration details.",
+            "definition" : "External Identity Provider (IdP) configuration details.",
+            "min" : 0,
+            "max" : "*"
+          },
+          {
+            "id" : "IdentityProvider.authorizeUrl",
+            "path" : "IdentityProvider.authorizeUrl",
+            "definition" : "Remote URL for the external Identity Provider authorize endpoint.",
+            "min" : 1,
+            "max" : "1",
+            "type" : [{
+              "code" : "string"
+            }]
+          },
+          {
+            "id" : "IdentityProvider.tokenUrl",
+            "path" : "IdentityProvider.tokenUrl",
+            "definition" : "Remote URL for the external Identity Provider token endpoint.",
+            "min" : 1,
+            "max" : "1",
+            "type" : [{
+              "code" : "string"
+            }]
+          },
+          {
+            "id" : "IdentityProvider.userInfoUrl",
+            "path" : "IdentityProvider.userInfoUrl",
+            "definition" : "Remote URL for the external Identity Provider userinfo endpoint.",
+            "min" : 1,
+            "max" : "1",
+            "type" : [{
+              "code" : "string"
+            }]
+          },
+          {
+            "id" : "IdentityProvider.clientId",
+            "path" : "IdentityProvider.clientId",
+            "definition" : "External Identity Provider client ID.",
+            "min" : 1,
+            "max" : "1",
+            "type" : [{
+              "code" : "string"
+            }]
+          },
+          {
+            "id" : "IdentityProvider.clientSecret",
+            "path" : "IdentityProvider.clientSecret",
+            "definition" : "External Identity Provider client secret.",
+            "min" : 1,
+            "max" : "1",
+            "type" : [{
+              "code" : "string"
+            }]
+          },
+          {
+            "id" : "IdentityProvider.useSubject",
+            "path" : "IdentityProvider.useSubject",
+            "short" : "Optional flag to use the subject field instead of the email field.",
+            "definition" : "Optional flag to use the subject field instead of the email field.",
+            "min" : 0,
+            "max" : "1",
+            "type" : [{
+              "code" : "boolean"
             }]
           }
         ]

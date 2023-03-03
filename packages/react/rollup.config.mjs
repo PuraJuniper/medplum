@@ -2,6 +2,7 @@ import resolve from '@rollup/plugin-node-resolve';
 import replace from '@rollup/plugin-replace';
 import terser from '@rollup/plugin-terser';
 import typescript from '@rollup/plugin-typescript';
+import svgr from '@svgr/rollup';
 import dotenv from 'dotenv';
 import { mkdirSync, writeFileSync } from 'fs';
 import peerDepsExternal from 'rollup-plugin-peer-deps-external';
@@ -16,11 +17,11 @@ const globals = {
   '@mantine/notifications': 'mantine.notifications',
   '@mantine/react': 'mantine.react',
   '@medplum/core': 'medplum.core',
+  '@medplum/fhir-router': 'medplum.fhirRouter',
   '@medplum/mock': 'medplum.mock',
-  '@tabler/icons': 'tabler.icons',
+  'prop-types': 'PropTypes',
   react: 'React',
   'react-dom': 'ReactDOM',
-  'react-router-dom': 'ReactRouterDOM',
 };
 
 const sourcemapPathTransform = (path) => path.replaceAll('\\', '/').replaceAll('../../../src', '../../src');
@@ -30,7 +31,7 @@ export default [
     input: 'src/index.ts',
     output: [
       {
-        file: 'dist/cjs/index.js',
+        file: 'dist/cjs/index.cjs',
         format: 'umd',
         name: 'medplum.react',
         sourcemap: true,
@@ -38,11 +39,10 @@ export default [
         globals,
       },
       {
-        file: 'dist/cjs/index.min.js',
+        file: 'dist/cjs/index.min.cjs',
         format: 'umd',
         name: 'medplum.react',
-        plugins: [terser()],
-        sourcemap: true,
+        plugins: [terser({ sourceMap: true })],
         sourcemapPathTransform,
         globals,
       },
@@ -58,7 +58,8 @@ export default [
       }),
       peerDepsExternal(),
       resolve({ extensions }),
-      typescript({ tsconfig: 'tsconfig.cjs.json', resolveJsonModule: true }),
+      svgr(),
+      typescript({ outDir: 'dist/cjs', declaration: false }),
       {
         buildEnd: () => {
           mkdirSync('./dist/cjs', { recursive: true });
@@ -73,6 +74,7 @@ export default [
     output: [
       {
         dir: 'dist/esm',
+        entryFileNames: '[name].mjs',
         format: 'esm',
         preserveModules: true,
         preserveModulesRoot: 'src',
@@ -80,10 +82,9 @@ export default [
         sourcemapPathTransform,
       },
       {
-        file: 'dist/esm/index.min.js',
+        file: 'dist/esm/index.min.mjs',
         format: 'esm',
-        plugins: [terser()],
-        sourcemap: true,
+        plugins: [terser({ sourceMap: true })],
         sourcemapPathTransform,
       },
     ],
@@ -98,7 +99,8 @@ export default [
       }),
       peerDepsExternal(),
       resolve({ extensions }),
-      typescript({ tsconfig: 'tsconfig.esm.json', resolveJsonModule: true }),
+      svgr(),
+      typescript({ module: 'es6', outDir: 'dist/esm', declaration: false }),
       {
         buildEnd: () => {
           mkdirSync('./dist/esm', { recursive: true });

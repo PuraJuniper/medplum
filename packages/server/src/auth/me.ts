@@ -1,8 +1,23 @@
-import { ProfileResource } from '@medplum/core';
-import { ProjectMembership, Reference, UserConfiguration } from '@medplum/fhirtypes';
+import { getReferenceString, Operator, ProfileResource } from '@medplum/core';
+import { BundleEntry, Login, ProjectMembership, Reference, User, UserConfiguration } from '@medplum/fhirtypes';
 import { Request, Response } from 'express';
+import { UAParser } from 'ua-parser-js';
 import { systemRepo } from '../fhir/repo';
 import { rewriteAttachments, RewriteMode } from '../fhir/rewrite';
+
+interface UserSession {
+  id: string;
+  lastUpdated: string;
+  authMethod: string;
+  remoteAddress: string;
+  browser?: string;
+  os?: string;
+}
+
+interface UserSecurity {
+  mfaEnrolled: boolean;
+  sessions: UserSession[];
+}
 
 export async function meHandler(req: Request, res: Response): Promise<void> {
   const membership = res.locals.membership as ProjectMembership;
@@ -11,9 +26,20 @@ export async function meHandler(req: Request, res: Response): Promise<void> {
 
   const config = await getUserConfiguration(membership);
 
+  let security: UserSecurity | undefined = undefined;
+  if (membership.user?.reference?.startsWith('User/')) {
+    const user = await systemRepo.readReference<User>(membership.user as Reference<User>);
+    const sessions = await getSessions(user);
+    security = {
+      mfaEnrolled: !!user.mfaEnrolled,
+      sessions,
+    };
+  }
+
   const result = {
     profile,
     config,
+    security,
   };
 
   res.status(200).json(await rewriteAttachments(RewriteMode.PRESIGNED_URL, systemRepo, result));
@@ -44,4 +70,45 @@ async function getUserConfiguration(membership: ProjectMembership): Promise<User
       },
     ],
   };
+}
+
+async function getSessions(user: User): Promise<UserSession[]> {
+  const logins = await systemRepo.search<Login>({
+    resourceType: 'Login',
+    filters: [
+      {
+        code: 'user',
+        operator: Operator.EQUALS,
+        value: getReferenceString(user),
+      },
+      {
+        code: '_lastUpdated',
+        operator: Operator.GREATER_THAN,
+        value: new Date(Date.now() - 3600 * 1000).toISOString(),
+      },
+    ],
+  });
+
+  const result = [];
+  for (const e of logins.entry as BundleEntry<Login>[]) {
+    const login = e.resource as Login;
+    if (!login.membership || login.revoked) {
+      continue;
+    }
+
+    let uaParser = undefined;
+    if (login.userAgent) {
+      uaParser = new UAParser(login.userAgent);
+    }
+
+    result.push({
+      id: login.id as string,
+      lastUpdated: login.meta?.lastUpdated as string,
+      authMethod: login.authMethod as string,
+      remoteAddress: login.remoteAddress as string,
+      browser: uaParser?.getBrowser()?.name,
+      os: uaParser?.getOS()?.name,
+    });
+  }
+  return result;
 }

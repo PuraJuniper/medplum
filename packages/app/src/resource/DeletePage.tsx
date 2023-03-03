@@ -2,21 +2,17 @@ import { Button } from '@mantine/core';
 import { showNotification } from '@mantine/notifications';
 import { normalizeErrorString } from '@medplum/core';
 import { ResourceType } from '@medplum/fhirtypes';
-import { useMedplum } from '@medplum/react';
+import { Document, useMedplum } from '@medplum/react';
 import React from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useParams } from 'react-router-dom';
 
-export interface DeletePageProps {
-  resourceType: ResourceType;
-  id: string;
-}
-
-export function DeletePage(props: DeletePageProps): JSX.Element {
-  const { resourceType, id } = props;
+export function DeletePage(): JSX.Element {
   const medplum = useMedplum();
+  const { resourceType, id } = useParams() as { resourceType: ResourceType; id: string };
   const navigate = useNavigate();
+
   return (
-    <>
+    <Document>
       <p>Are you sure you want to delete this {resourceType}?</p>
       <Button
         color="red"
@@ -29,6 +25,6 @@ export function DeletePage(props: DeletePageProps): JSX.Element {
       >
         Delete
       </Button>
-    </>
+    </Document>
   );
 }

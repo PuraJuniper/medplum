@@ -8,32 +8,33 @@ const extensions = ['.ts'];
 
 const globals = {
   '@medplum/core': 'medplum.core',
-  'fast-json-patch': 'fast-json-patch',
+  '@medplum/fhir-router': 'medplum.fhirRouter',
+  'rfc6902': 'rfc6902',
 };
 
 export default {
   input: 'src/index.ts',
   output: [
     {
-      file: 'dist/esm/index.js',
+      file: 'dist/esm/index.mjs',
       format: 'esm',
       sourcemap: true,
     },
     {
-      file: 'dist/esm/index.min.js',
+      file: 'dist/esm/index.min.mjs',
       format: 'esm',
       plugins: [terser()],
       sourcemap: true,
     },
     {
-      file: 'dist/cjs/index.js',
+      file: 'dist/cjs/index.cjs',
       format: 'umd',
       name: 'medplum.mock',
       sourcemap: true,
       globals,
     },
     {
-      file: 'dist/cjs/index.min.js',
+      file: 'dist/cjs/index.min.cjs',
       format: 'umd',
       name: 'medplum.mock',
       plugins: [terser()],
@@ -43,7 +44,7 @@ export default {
   ],
   plugins: [
     resolve({ extensions }),
-    typescript(),
+    typescript({ declaration: false }),
     json(),
     {
       buildEnd: () => {

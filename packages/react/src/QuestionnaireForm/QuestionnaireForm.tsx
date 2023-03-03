@@ -87,6 +87,7 @@ export function QuestionnaireForm(props: QuestionnaireFormProps): JSX.Element | 
             subject: props.subject,
             source: createReference(source as ProfileResource),
             authored: new Date().toISOString(),
+            status: 'completed',
           });
         }
       }}
@@ -319,6 +320,7 @@ export function QuestionnaireFormItem(props: QuestionnaireFormItemProps): JSX.El
           name={name}
           defaultValue={initial?.valueQuantity}
           onChange={(newValue) => onChangeAnswer({ valueQuantity: newValue })}
+          disableWheel
         />
       );
     case QuestionnaireItemType.choice:

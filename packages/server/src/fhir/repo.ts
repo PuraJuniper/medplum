@@ -1,13 +1,13 @@
 import {
   allOk,
   badRequest,
-  createReference,
   deepEquals,
   DEFAULT_SEARCH_COUNT,
   evalFhirPath,
   Filter,
   forbidden,
   formatSearchQuery,
+  getReferenceString,
   getSearchParameterDetails,
   getStatus,
   gone,
@@ -16,9 +16,11 @@ import {
   isOk,
   matchesSearchRequest,
   normalizeErrorString,
+  normalizeOperationOutcome,
   notFound,
+  OperationOutcomeError,
   Operator as FhirOperator,
-  ProfileResource,
+  parseSearchUrl,
   resolveId,
   SearchParameterDetails,
   SearchParameterType,
@@ -26,6 +28,8 @@ import {
   SortRule,
   stringify,
   tooManyRequests,
+  validateResource,
+  validateResourceType,
 } from '@medplum/core';
 import {
   AccessPolicy,
@@ -33,17 +37,16 @@ import {
   Bundle,
   BundleEntry,
   BundleLink,
-  Login,
   Meta,
   OperationOutcome,
-  ProjectMembership,
   Reference,
   Resource,
+  ResourceType,
   SearchParameter,
 } from '@medplum/fhirtypes';
 import { randomUUID } from 'crypto';
-import { applyPatch, JsonPatchError, Operation } from 'fast-json-patch';
-import { PoolClient } from 'pg';
+import { Pool, PoolClient } from 'pg';
+import { applyPatch, Operation } from 'rfc6902';
 import { URL } from 'url';
 import validator from 'validator';
 import { getConfig } from '../config';
@@ -66,17 +69,19 @@ import {
 import { addBackgroundJobs } from '../workers';
 import { addSubscriptionJobs } from '../workers/subscription';
 import { validateResourceWithJsonSchema } from './jsonschema';
-import { AddressTable, ContactPointTable, HumanNameTable, IdentifierTable, LookupTable } from './lookups';
+import { AddressTable } from './lookups/address';
+import { HumanNameTable } from './lookups/humanname';
+import { LookupTable } from './lookups/lookuptable';
+import { TokenTable } from './lookups/token';
+import { ValueSetElementTable } from './lookups/valuesetelement';
 import { getPatient } from './patient';
 import { validateReferences } from './references';
 import { rewriteAttachments, RewriteMode } from './rewrite';
-import { validateResource, validateResourceType } from './schema';
-import { parseSearchUrl } from './search';
-import { applySmartScopes } from './smart';
 import {
   Column,
   Condition,
   Conjunction,
+  DeleteQuery,
   Disjunction,
   Expression,
   InsertQuery,
@@ -124,6 +129,12 @@ export interface RepositoryContext {
   superAdmin?: boolean;
 
   /**
+   * Optional flag for project administrators,
+   * which grants additional project-level access.
+   */
+  projectAdmin?: boolean;
+
+  /**
    * Optional flag to validate resources in strict mode.
    * Strict mode validates resources against StructureDefinition resources,
    * which includes strict date validation, backbone elements, and more.
@@ -149,7 +160,7 @@ export interface RepositoryContext {
   extendedMode?: boolean;
 }
 
-export interface CacheEntry<T extends Resource> {
+export interface CacheEntry<T extends Resource = Resource> {
   resource: T;
   projectId: string;
 }
@@ -171,16 +182,22 @@ const publicResourceTypes = [
  * Protected resource types are in the "medplum" project.
  * Reading and writing is limited to the system account.
  */
-const protectedResourceTypes = ['JsonWebKey', 'Login', 'PasswordChangeRequest', 'Project', 'ProjectMembership', 'User'];
+const protectedResourceTypes = ['DomainConfiguration', 'JsonWebKey', 'Login', 'PasswordChangeRequest', 'User'];
+
+/**
+ * Project admin resource types are special resources that are only
+ * accessible to project administrators.
+ */
+export const projectAdminResourceTypes = ['Project', 'ProjectMembership'];
 
 /**
  * The lookup tables array includes a list of special tables for search indexing.
  */
 const lookupTables: LookupTable<unknown>[] = [
   new AddressTable(),
-  new ContactPointTable(),
   new HumanNameTable(),
-  new IdentifierTable(),
+  new TokenTable(),
+  new ValueSetElementTable(),
 ];
 
 /**
@@ -233,30 +250,33 @@ export class Repository {
 
   async #readResourceImpl<T extends Resource>(resourceType: string, id: string): Promise<T> {
     if (!id || !validator.isUUID(id)) {
-      throw notFound;
+      throw new OperationOutcomeError(notFound);
     }
 
     validateResourceType(resourceType);
 
     if (!this.#canReadResourceType(resourceType)) {
-      throw forbidden;
+      throw new OperationOutcomeError(forbidden);
     }
 
-    if (!this.#context.accessPolicy) {
-      const cacheRecord = await getCacheEntry<T>(resourceType, id);
-      if (cacheRecord) {
-        if (
-          !this.#isSuperAdmin() &&
-          this.#context.project !== undefined &&
-          cacheRecord.projectId !== undefined &&
-          cacheRecord.projectId !== this.#context.project
-        ) {
-          throw notFound;
-        }
+    const cacheRecord = await getCacheEntry<T>(resourceType, id);
+    if (cacheRecord) {
+      // This is an optimization to avoid a database query.
+      // However, it depends on all values in the cache having "meta.compartment"
+      // Old versions of Medplum did not populate "meta.compartment"
+      // So this optimization is blocked until we add a migration.
+      // if (!this.#canReadCacheEntry(cacheRecord)) {
+      //   throw new OperationOutcomeError(notFound);
+      // }
+      if (this.#canReadCacheEntry(cacheRecord)) {
         return cacheRecord.resource;
       }
     }
 
+    return this.#readResourceFromDatabase(resourceType, id);
+  }
+
+  async #readResourceFromDatabase<T extends Resource>(resourceType: string, id: string): Promise<T> {
     const client = getClient();
     const builder = new SelectQuery(resourceType).column('content').column('deleted').where('id', Operator.EQUALS, id);
 
@@ -264,11 +284,11 @@ export class Repository {
 
     const rows = await builder.execute(client);
     if (rows.length === 0) {
-      throw notFound;
+      throw new OperationOutcomeError(notFound);
     }
 
     if (rows[0].deleted) {
-      throw gone;
+      throw new OperationOutcomeError(gone);
     }
 
     const resource = JSON.parse(rows[0].content as string) as T;
@@ -276,10 +296,72 @@ export class Repository {
     return resource;
   }
 
+  #canReadCacheEntry(cacheEntry: CacheEntry): boolean {
+    if (
+      !this.#isSuperAdmin() &&
+      this.#context.project !== undefined &&
+      cacheEntry.projectId !== undefined &&
+      cacheEntry.projectId !== this.#context.project
+    ) {
+      return false;
+    }
+    if (!this.#matchesAccessPolicy(cacheEntry.resource, true)) {
+      return false;
+    }
+    return true;
+  }
+
+  async readReferences(references: Reference[]): Promise<(Resource | Error)[]> {
+    const cacheEntries = await getCacheEntries(references);
+    const result: (Resource | Error)[] = new Array(references.length);
+
+    for (let i = 0; i < result.length; i++) {
+      const reference = references[i];
+      const cacheEntry = cacheEntries[i];
+      let entryResult = await this.#processReadReferenceEntry(reference, cacheEntry);
+      if (entryResult instanceof Error) {
+        this.#logEvent(ReadInteraction, AuditEventOutcome.MinorFailure, entryResult);
+      } else {
+        entryResult = this.#removeHiddenFields(entryResult);
+        this.#logEvent(ReadInteraction, AuditEventOutcome.Success, undefined, entryResult);
+      }
+      result[i] = entryResult;
+    }
+
+    return result;
+  }
+
+  async #processReadReferenceEntry(
+    reference: Reference,
+    cacheEntry: CacheEntry | undefined
+  ): Promise<Resource | Error> {
+    try {
+      const [resourceType, id] = reference.reference?.split('/') as [ResourceType, string];
+      validateResourceType(resourceType);
+
+      if (!this.#canReadResourceType(resourceType)) {
+        return new OperationOutcomeError(forbidden);
+      }
+
+      if (cacheEntry) {
+        if (!this.#canReadCacheEntry(cacheEntry)) {
+          return new OperationOutcomeError(notFound);
+        }
+        return cacheEntry.resource;
+      }
+      return await this.#readResourceFromDatabase(resourceType, id);
+    } catch (err) {
+      if (err instanceof OperationOutcomeError) {
+        return err;
+      }
+      return new OperationOutcomeError(normalizeOperationOutcome(err), err);
+    }
+  }
+
   async readReference<T extends Resource>(reference: Reference<T>): Promise<T> {
     const parts = reference.reference?.split('/');
     if (!parts || parts.length !== 2) {
-      throw badRequest('Invalid reference');
+      throw new OperationOutcomeError(badRequest('Invalid reference'));
     }
     return this.readResource(parts[0], parts[1]);
   }
@@ -301,7 +383,7 @@ export class Repository {
       try {
         resource = await this.#readResourceImpl<T>(resourceType, id);
       } catch (err) {
-        if (!isGone(err as OperationOutcome)) {
+        if (!(err instanceof OperationOutcomeError) || !isGone(err.outcome)) {
           throw err;
         }
       }
@@ -365,7 +447,7 @@ export class Repository {
   async readVersion<T extends Resource>(resourceType: string, id: string, vid: string): Promise<T> {
     try {
       if (!validator.isUUID(vid)) {
-        throw notFound;
+        throw new OperationOutcomeError(notFound);
       }
 
       await this.#readResourceImpl<T>(resourceType, id);
@@ -378,7 +460,7 @@ export class Repository {
         .execute(client);
 
       if (rows.length === 0) {
-        throw notFound;
+        throw new OperationOutcomeError(notFound);
       }
 
       const result = this.#removeHiddenFields(JSON.parse(rows[0].content as string));
@@ -414,17 +496,17 @@ export class Repository {
 
     const { resourceType, id } = resource;
     if (!id) {
-      throw badRequest('Missing id');
+      throw new OperationOutcomeError(badRequest('Missing id'));
     }
 
     if (!this.#canWriteResourceType(resourceType)) {
-      throw forbidden;
+      throw new OperationOutcomeError(forbidden);
     }
 
     const existing = await this.#checkExistingResource<T>(resourceType, id, create);
 
     if (await this.#isTooManyVersions(resourceType, id, create)) {
-      throw tooManyRequests;
+      throw new OperationOutcomeError(tooManyRequests);
     }
 
     if (existing) {
@@ -432,7 +514,7 @@ export class Repository {
 
       if (!this.#canWriteResource(existing)) {
         // Check before the update
-        throw forbidden;
+        throw new OperationOutcomeError(forbidden);
       }
     }
 
@@ -462,7 +544,7 @@ export class Repository {
       resultMeta.project = project;
     }
 
-    const account = await this.#getAccount(existing, updated);
+    const account = await this.#getAccount(existing, updated, create);
     if (account) {
       resultMeta.account = account;
     }
@@ -471,18 +553,34 @@ export class Repository {
 
     if (!this.#canWriteResource(result)) {
       // Check after the update
-      throw forbidden;
+      throw new OperationOutcomeError(forbidden);
     }
 
+    if (!this.#isCacheOnly(result)) {
+      await this.#writeToDatabase(result);
+    }
+
+    await setCacheEntry(result);
+    await addBackgroundJobs(result);
+    this.#removeHiddenFields(result);
+    return result;
+  }
+
+  /**
+   * Writes the resource to the database.
+   * This is a single atomic operation inside of a transaction.
+   * @param resource The resource to write to the database.
+   */
+  async #writeToDatabase<T extends Resource>(resource: T): Promise<void> {
     // Note: We don't try/catch this because if connecting throws an exception.
     // We don't need to dispose of the client (it will be undefined).
     // https://node-postgres.com/features/transactions
     const client = await getClient().connect();
     try {
       await client.query('BEGIN');
-      await this.#writeResource(client, result);
-      await this.#writeResourceVersion(client, result);
-      await this.#writeLookupTables(client, result);
+      await this.#writeResource(client, resource);
+      await this.#writeResourceVersion(client, resource);
+      await this.#writeLookupTables(client, resource);
       await client.query('COMMIT');
     } catch (err) {
       await client.query('ROLLBACK');
@@ -490,11 +588,6 @@ export class Repository {
     } finally {
       client.release();
     }
-
-    await setCacheEntry(result);
-    await addBackgroundJobs(result);
-    this.#removeHiddenFields(result);
-    return result;
   }
 
   /**
@@ -516,17 +609,13 @@ export class Repository {
     try {
       return await this.#readResourceImpl<T>(resourceType, id);
     } catch (err) {
-      if (!err || typeof err !== 'object' || !('resourceType' in err)) {
-        throw err;
+      const outcome = normalizeOperationOutcome(err);
+      if (!isOk(outcome) && !isNotFound(outcome) && !isGone(outcome)) {
+        throw new OperationOutcomeError(outcome, err);
       }
 
-      const existingOutcome = err as OperationOutcome;
-      if (!isOk(existingOutcome) && !isNotFound(existingOutcome) && !isGone(existingOutcome)) {
-        throw existingOutcome;
-      }
-
-      if (!create && isNotFound(existingOutcome) && !this.#canSetId()) {
-        throw existingOutcome;
+      if (!create && isNotFound(outcome) && !this.#canSetId()) {
+        throw new OperationOutcomeError(outcome, err);
       }
 
       // Otherwise, it is ok if the resource is not found.
@@ -584,17 +673,20 @@ export class Repository {
    */
   async reindexResourceType(resourceType: string): Promise<void> {
     if (!this.#isSuperAdmin()) {
-      throw forbidden;
+      throw new OperationOutcomeError(forbidden);
     }
 
     const client = getClient();
-    const builder = new SelectQuery(resourceType).column({ tableName: resourceType, columnName: 'id' });
+    const builder = new SelectQuery(resourceType).column({ tableName: resourceType, columnName: 'content' });
     this.#addDeletedFilter(builder);
 
-    const rows = await builder.execute(client);
-    for (const { id } of rows) {
-      await this.reindexResource(resourceType, id);
-    }
+    await builder.executeCursor(client, async (row: any) => {
+      try {
+        await this.#reindexResourceImpl(JSON.parse(row.content) as Resource);
+      } catch (err) {
+        logger.error('Failed to reindex resource', normalizeErrorString(err));
+      }
+    });
   }
 
   /**
@@ -604,12 +696,23 @@ export class Repository {
    * @param resourceType The resource type.
    * @param id The resource ID.
    */
-  async reindexResource<T extends Resource>(resourceType: string, id: string): Promise<T> {
+  async reindexResource<T extends Resource>(resourceType: string, id: string): Promise<void> {
     if (!this.#isSuperAdmin()) {
-      throw forbidden;
+      throw new OperationOutcomeError(forbidden);
     }
 
     const resource = await this.#readResourceImpl<T>(resourceType, id);
+    return this.#reindexResourceImpl(resource);
+  }
+
+  /**
+   * Internal implementation of reindexing a resource.
+   * This accepts a resource as a parameter, rather than a resource type and ID.
+   * When doing a bulk reindex, this will be more efficient because it avoids unnecessary reads.
+   * @param resource The resource.
+   * @returns The reindexed resource.
+   */
+  async #reindexResourceImpl<T extends Resource>(resource: T): Promise<void> {
     (resource.meta as Meta).compartment = this.#getCompartments(resource);
 
     // Note: We don't try/catch this because if connecting throws an exception.
@@ -618,8 +721,8 @@ export class Repository {
     const client = await getClient().connect();
     try {
       await client.query('BEGIN');
-      await this.#writeResource(client, resource as T);
-      await this.#writeLookupTables(client, resource as T);
+      await this.#writeResource(client, resource);
+      await this.#writeLookupTables(client, resource);
       await client.query('COMMIT');
     } catch (err) {
       await client.query('ROLLBACK');
@@ -627,25 +730,22 @@ export class Repository {
     } finally {
       client.release();
     }
-
-    return resource as T;
   }
 
   /**
    * Resends subscriptions for the resource.
-   * This is only available to the system and super admin accounts.
+   * This is only available to the admin accounts.
    * This should not result in any change to the resource or its history.
    * @param resourceType The resource type.
    * @param id The resource ID.
    */
-  async resendSubscriptions<T extends Resource>(resourceType: string, id: string): Promise<T> {
-    if (!this.#isSuperAdmin()) {
-      throw forbidden;
+  async resendSubscriptions<T extends Resource>(resourceType: string, id: string): Promise<void> {
+    if (!this.#isSuperAdmin() && !this.#context.projectAdmin) {
+      throw new OperationOutcomeError(forbidden);
     }
 
     const resource = await this.#readResourceImpl<T>(resourceType, id);
-    await addSubscriptionJobs(resource);
-    return resource as T;
+    return addSubscriptionJobs(resource);
   }
 
   async deleteResource(resourceType: string, id: string): Promise<void> {
@@ -653,7 +753,7 @@ export class Repository {
       const resource = await this.#readResourceImpl(resourceType, id);
 
       if (!this.#canWriteResourceType(resourceType)) {
-        throw forbidden;
+        throw new OperationOutcomeError(forbidden);
       }
 
       await deleteCacheEntry(resourceType, id);
@@ -680,7 +780,7 @@ export class Repository {
         },
       ]).execute(client);
 
-      await this.#deleteFromLookupTables(resource);
+      await this.#deleteFromLookupTables(client, resource);
       this.#logEvent(DeleteInteraction, AuditEventOutcome.Success, undefined, resource);
     } catch (err) {
       this.#logEvent(DeleteInteraction, AuditEventOutcome.MinorFailure, err);
@@ -692,17 +792,16 @@ export class Repository {
     try {
       const resource = await this.#readResourceImpl(resourceType, id);
 
-      let patchResult;
       try {
-        patchResult = applyPatch(resource, patch, true);
+        const patchResult = applyPatch(resource, patch).filter(Boolean);
+        if (patchResult.length > 0) {
+          throw new OperationOutcomeError(badRequest(patchResult.map((e) => (e as Error).message).join('\n')));
+        }
       } catch (err) {
-        const patchError = err as JsonPatchError;
-        const message = patchError.message?.split('\n')?.[0] || 'JSONPatch error';
-        throw badRequest(message);
+        throw new OperationOutcomeError(normalizeOperationOutcome(err));
       }
 
-      const patchedResource = patchResult.newDocument;
-      const result = await this.#updateResourceImpl(patchedResource, false);
+      const result = await this.#updateResourceImpl(resource, false);
       this.#logEvent(PatchInteraction, AuditEventOutcome.Success, undefined, result);
       return result;
     } catch (err) {
@@ -711,13 +810,29 @@ export class Repository {
     }
   }
 
+  /**
+   * Purges resources of the specified type that were last updated before the specified date.
+   * This is only available to the system and super admin accounts.
+   * @param resourceType The FHIR resource type.
+   * @param before The date before which resources should be purged.
+   */
+  async purgeResources(resourceType: ResourceType, before: string): Promise<void> {
+    if (!this.#isSuperAdmin()) {
+      throw new OperationOutcomeError(forbidden);
+    }
+    await new DeleteQuery(resourceType).where('lastUpdated', Operator.LESS_THAN_OR_EQUALS, before).execute(getClient());
+    await new DeleteQuery(resourceType + '_History')
+      .where('lastUpdated', Operator.LESS_THAN_OR_EQUALS, before)
+      .execute(getClient());
+  }
+
   async search<T extends Resource>(searchRequest: SearchRequest): Promise<Bundle<T>> {
     try {
       const resourceType = searchRequest.resourceType;
       validateResourceType(resourceType);
 
       if (!this.#canReadResourceType(resourceType)) {
-        throw forbidden;
+        throw new OperationOutcomeError(forbidden);
       }
 
       // Ensure that "count" is set.
@@ -778,32 +893,37 @@ export class Repository {
 
     const rows = await builder.execute(client);
     const resources = rows.slice(0, count).map((row) => JSON.parse(row.content as string)) as T[];
-    const entry = resources.map(
+    const entries = resources.map(
       (resource) =>
         ({
           fullUrl: this.#getFullUrl(resourceType, resource.id as string),
-          resource: this.#removeHiddenFields(resource),
+          resource,
         } as BundleEntry)
     );
 
-    if (searchRequest.revInclude === 'Provenance:target') {
-      for (const resource of resources) {
-        entry.push({
-          search: {
-            mode: 'include',
+    if (searchRequest.revInclude) {
+      const [nestedResourceType, nested] = searchRequest.revInclude.split(':');
+      const nestedSearchRequest: SearchRequest = {
+        resourceType: nestedResourceType as ResourceType,
+        filters: [
+          {
+            code: nested,
+            operator: FhirOperator.EQUALS,
+            value: resources.map(getReferenceString).join(','),
           },
-          resource: {
-            resourceType: 'Provenance',
-            target: [createReference(resource)],
-            recorded: resource.meta?.lastUpdated,
-            agent: [{ who: resource.meta?.author as Reference<ProfileResource> | undefined }],
-          },
-        });
-      }
+        ],
+      };
+
+      const nestedSearchEntries = await this.#getSearchEntries(nestedSearchRequest);
+      entries.push(...nestedSearchEntries.entry);
+    }
+
+    for (const entry of entries) {
+      this.#removeHiddenFields(entry.resource as Resource);
     }
 
     return {
-      entry: entry as BundleEntry<T>[],
+      entry: entries as BundleEntry<T>[],
       hasMore: rows.length > count,
     };
   }
@@ -984,12 +1104,12 @@ export class Repository {
 
     const param = getSearchParameter(resourceType, filter.code);
     if (!param || !param.code) {
-      throw badRequest(`Unknown search parameter: ${filter.code}`);
+      throw new OperationOutcomeError(badRequest(`Unknown search parameter: ${filter.code}`));
     }
 
-    const lookupTable = this.#getLookupTable(param);
+    const lookupTable = this.#getLookupTable(resourceType, param);
     if (lookupTable) {
-      lookupTable.addWhere(selectQuery, predicate, filter);
+      lookupTable.addWhere(selectQuery, resourceType, predicate, filter);
       return;
     }
 
@@ -998,7 +1118,7 @@ export class Repository {
       predicate.where(details.columnName, filter.value === 'true' ? Operator.EQUALS : Operator.NOT_EQUALS, null);
     } else if (param.type === 'string') {
       this.#addStringSearchFilter(predicate, details, filter);
-    } else if (param.type === 'token') {
+    } else if (param.type === 'token' || param.type === 'uri') {
       this.#addTokenSearchFilter(predicate, resourceType, details, filter);
     } else if (param.type === 'reference') {
       this.#addReferenceSearchFilter(predicate, details, filter);
@@ -1023,19 +1143,23 @@ export class Repository {
    */
   #trySpecialSearchParameter(predicate: Conjunction, resourceType: string, filter: Filter): boolean {
     const code = filter.code;
-    if (!code.startsWith('_')) {
-      return false;
-    }
 
     if (code === '_id') {
       this.#addTokenSearchFilter(predicate, resourceType, { columnName: 'id', type: SearchParameterType.TEXT }, filter);
-    } else if (code === '_lastUpdated') {
-      this.#addDateSearchFilter(predicate, { type: SearchParameterType.DATETIME, columnName: 'lastUpdated' }, filter);
-    } else if (code === '_compartment' || code === '_project') {
-      predicate.where('compartments', Operator.ARRAY_CONTAINS, [filter.value], 'UUID[]');
+      return true;
     }
 
-    return true;
+    if (code === '_lastUpdated') {
+      this.#addDateSearchFilter(predicate, { type: SearchParameterType.DATETIME, columnName: 'lastUpdated' }, filter);
+      return true;
+    }
+
+    if (code === '_compartment' || code === '_project') {
+      predicate.where('compartments', Operator.ARRAY_CONTAINS, [filter.value], 'UUID[]');
+      return true;
+    }
+
+    return false;
   }
 
   /**
@@ -1068,7 +1192,12 @@ export class Repository {
     const column = new Column(resourceType, details.columnName);
     const expressions = [];
     for (const valueStr of filter.value.split(',')) {
-      const value = details.type === SearchParameterType.BOOLEAN ? valueStr === 'true' : valueStr;
+      let value: string | boolean = valueStr;
+      if (details.type === SearchParameterType.BOOLEAN) {
+        value = valueStr === 'true';
+      } else if (valueStr.includes('|')) {
+        value = valueStr.split('|').pop() as string;
+      }
       if (details.array) {
         expressions.push(new Condition(column, Operator.ARRAY_CONTAINS, value));
       } else if (filter.operator === FhirOperator.CONTAINS) {
@@ -1092,15 +1221,20 @@ export class Repository {
    * @param filter The search filter.
    */
   #addReferenceSearchFilter(predicate: Conjunction, details: SearchParameterDetails, filter: Filter): void {
-    // TODO: Support reference queries (filter.value === 'Patient?identifier=123')
-    let value = filter.value;
-    if (!value.includes('/') && (details.columnName === 'subject' || details.columnName === 'patient')) {
-      value = 'Patient/' + value;
+    const values = [];
+    for (const value of filter.value.split(',')) {
+      if (!value.includes('/') && (details.columnName === 'subject' || details.columnName === 'patient')) {
+        values.push('Patient/' + value);
+      } else {
+        values.push(value);
+      }
     }
     if (details.array) {
-      predicate.where(details.columnName, Operator.ARRAY_CONTAINS, value);
+      predicate.where(details.columnName, Operator.ARRAY_CONTAINS, values);
+    } else if (values.length === 1) {
+      predicate.where(details.columnName, Operator.EQUALS, values[0]);
     } else {
-      predicate.where(details.columnName, Operator.EQUALS, value);
+      predicate.where(details.columnName, Operator.IN, values);
     }
   }
 
@@ -1113,7 +1247,7 @@ export class Repository {
   #addDateSearchFilter(predicate: Conjunction, details: SearchParameterDetails, filter: Filter): void {
     const dateValue = new Date(filter.value);
     if (isNaN(dateValue.getTime())) {
-      throw badRequest(`Invalid date value: ${filter.value}`);
+      throw new OperationOutcomeError(badRequest(`Invalid date value: ${filter.value}`));
     }
     predicate.where(details.columnName, fhirOperatorToSqlOperator(filter.operator), filter.value);
   }
@@ -1145,9 +1279,9 @@ export class Repository {
       return;
     }
 
-    const lookupTable = this.#getLookupTable(param);
+    const lookupTable = this.#getLookupTable(resourceType, param);
     if (lookupTable) {
-      lookupTable.addOrderBy(builder, sortRule);
+      lookupTable.addOrderBy(builder, resourceType, sortRule);
       return;
     }
 
@@ -1245,7 +1379,13 @@ export class Repository {
    * @param searchParam The search parameter definition.
    */
   #buildColumn(resource: Resource, columns: Record<string, any>, searchParam: SearchParameter): void {
-    if (searchParam.code?.startsWith('_') || searchParam.type === 'composite' || this.#isIndexTable(searchParam)) {
+    if (
+      searchParam.code === '_id' ||
+      searchParam.code === '_lastUpdated' ||
+      searchParam.code === '_compartment' ||
+      searchParam.type === 'composite' ||
+      this.#isIndexTable(resource.resourceType, searchParam)
+    ) {
       return;
     }
 
@@ -1314,6 +1454,11 @@ export class Repository {
         return date.toISOString().substring(0, 10);
       } catch (ex) {
         // Silent ignore
+      }
+    } else if (typeof value === 'object') {
+      if ('start' in value) {
+        // Can be a Period
+        return this.#buildDateColumn(value.start);
       }
     }
     return undefined;
@@ -1436,9 +1581,9 @@ export class Repository {
   }
 
   /**
-   *
+   * Writes resources values to the lookup tables.
    * @param client The database client inside the transaction.
-   * @param resource
+   * @param resource The resource to index.
    */
   async #writeLookupTables(client: PoolClient, resource: Resource): Promise<void> {
     for (const lookupTable of lookupTables) {
@@ -1446,19 +1591,24 @@ export class Repository {
     }
   }
 
-  async #deleteFromLookupTables(resource: Resource): Promise<void> {
+  /**
+   * Deletes values from lookup tables.
+   * @param client The database client inside the transaction.
+   * @param resource The resource to delete.
+   */
+  async #deleteFromLookupTables(client: Pool | PoolClient, resource: Resource): Promise<void> {
     for (const lookupTable of lookupTables) {
-      await lookupTable.deleteValuesForResource(resource);
+      await lookupTable.deleteValuesForResource(client, resource);
     }
   }
 
-  #isIndexTable(searchParam: SearchParameter): boolean {
-    return !!this.#getLookupTable(searchParam);
+  #isIndexTable(resourceType: string, searchParam: SearchParameter): boolean {
+    return !!this.#getLookupTable(resourceType, searchParam);
   }
 
-  #getLookupTable(searchParam: SearchParameter): LookupTable<unknown> | undefined {
+  #getLookupTable(resourceType: string, searchParam: SearchParameter): LookupTable<unknown> | undefined {
     for (const lookupTable of lookupTables) {
-      if (lookupTable.isIndexed(searchParam)) {
+      if (lookupTable.isIndexed(searchParam, resourceType)) {
         return lookupTable;
       }
     }
@@ -1497,6 +1647,14 @@ export class Repository {
    * @returns The project ID.
    */
   #getProjectId(resource: Resource): string | undefined {
+    if (resource.resourceType === 'Project') {
+      return resource.id;
+    }
+
+    if (resource.resourceType === 'ProjectMembership') {
+      return resolveId(resource.project);
+    }
+
     if (publicResourceTypes.includes(resource.resourceType)) {
       return undefined;
     }
@@ -1544,15 +1702,19 @@ export class Repository {
    * @param resource The FHIR resource.
    * @returns
    */
-  async #getAccount(existing: Resource | undefined, updated: Resource): Promise<Reference | undefined> {
+  async #getAccount(
+    existing: Resource | undefined,
+    updated: Resource,
+    create: boolean
+  ): Promise<Reference | undefined> {
     const account = updated.meta?.account;
     if (account && this.#canWriteMeta()) {
       // If the user specifies an account, allow it if they have permission.
       return account;
     }
 
-    if (this.#context.accessPolicy?.compartment) {
-      // If the user access policy specifies a comparment, then use it as the account.
+    if (create && this.#context.accessPolicy?.compartment) {
+      // If the user access policy specifies a compartment, then use it as the account.
       return this.#context.accessPolicy?.compartment;
     }
 
@@ -1613,7 +1775,7 @@ export class Repository {
     }
     if (this.#context.accessPolicy.resource) {
       for (const resourcePolicy of this.#context.accessPolicy.resource) {
-        if (resourcePolicy.resourceType === resourceType || resourcePolicy.resourceType === '*') {
+        if (this.#matchesAccessPolicyResourceType(resourcePolicy.resourceType, resourceType)) {
           return true;
         }
       }
@@ -1644,7 +1806,7 @@ export class Repository {
     if (this.#context.accessPolicy.resource) {
       for (const resourcePolicy of this.#context.accessPolicy.resource) {
         if (
-          (resourcePolicy.resourceType === resourceType || resourcePolicy.resourceType === '*') &&
+          this.#matchesAccessPolicyResourceType(resourcePolicy.resourceType, resourceType) &&
           !resourcePolicy.readonly
         ) {
           return true;
@@ -1671,22 +1833,90 @@ export class Repository {
     if (publicResourceTypes.includes(resourceType)) {
       return false;
     }
+    return this.#matchesAccessPolicy(resource, false);
+  }
+
+  /**
+   * Returns true if the resource satisfies the current access policy.
+   * @param resource The resource.
+   * @param readonly True if the resource is being read.
+   * @returns True if the resource matches the access policy.
+   */
+  #matchesAccessPolicy(resource: Resource, readonly: boolean): boolean {
     if (!this.#context.accessPolicy) {
       return true;
     }
     if (this.#context.accessPolicy.resource) {
       for (const resourcePolicy of this.#context.accessPolicy.resource) {
-        if (
-          (resourcePolicy.resourceType === resourceType || resourcePolicy.resourceType === '*') &&
-          !resourcePolicy.readonly &&
-          (!resourcePolicy.criteria ||
-            matchesSearchRequest(resource, this.#parseCriteriaAsSearchRequest(resourcePolicy.criteria)))
-        ) {
+        if (this.#matchesAccessPolicyResourcePolicy(resource, resourcePolicy, readonly)) {
           return true;
         }
       }
     }
     return false;
+  }
+
+  /**
+   * Returns true if the resource satisfies the specified access policy resource policy.
+   * @param resource The resource.
+   * @param resourcePolicy One per-resource policy section from the access policy.
+   * @param readonly True if the resource is being read.
+   * @returns True if the resource matches the access policy.
+   */
+  #matchesAccessPolicyResourcePolicy(
+    resource: Resource,
+    resourcePolicy: AccessPolicyResource,
+    readonly: boolean
+  ): boolean {
+    const resourceType = resource.resourceType;
+    if (!this.#matchesAccessPolicyResourceType(resourcePolicy.resourceType, resourceType)) {
+      return false;
+    }
+    if (!readonly && resourcePolicy.readonly) {
+      return false;
+    }
+    if (
+      resourcePolicy.compartment &&
+      !resource.meta?.compartment?.find((c) => c.reference === resourcePolicy.compartment?.reference)
+    ) {
+      // Deprecated - to be removed
+      return false;
+    }
+    if (
+      resourcePolicy.criteria &&
+      !matchesSearchRequest(resource, this.#parseCriteriaAsSearchRequest(resourcePolicy.criteria))
+    ) {
+      return false;
+    }
+    return true;
+  }
+
+  /**
+   * Returns true if the resource type matches the access policy resource type.
+   * @param accessPolicyResourceType The resource type from the access policy.
+   * @param resourceType The candidate resource resource type.
+   * @returns True if the resource type matches the access policy resource type.
+   */
+  #matchesAccessPolicyResourceType(accessPolicyResourceType: string | undefined, resourceType: string): boolean {
+    if (accessPolicyResourceType === resourceType) {
+      return true;
+    }
+    if (accessPolicyResourceType === '*' && !projectAdminResourceTypes.includes(resourceType)) {
+      // Project admin resource types are not allowed to be wildcarded
+      // Project admin resource types must be explicitly included
+      return true;
+    }
+    return false;
+  }
+
+  /**
+   * Returns true if the resource is "cache only" and not written to the database.
+   * This is a highly specialized use case for internal system resources.
+   * @param resource The candidate resource.
+   * @returns True if the resource should be cached only and not written to the database.
+   */
+  #isCacheOnly(resource: Resource): boolean {
+    return resource.resourceType === 'Login' && (resource.authMethod === 'client' || resource.authMethod === 'execute');
   }
 
   #parseCriteriaAsSearchRequest(criteria: string): SearchRequest {
@@ -1747,7 +1977,8 @@ export class Repository {
    */
   #removeField<T extends Resource>(input: T, path: string): T {
     const patch: Operation[] = [{ op: 'remove', path: `/${path.replaceAll('.', '/')}` }];
-    return applyPatch(input, patch).newDocument;
+    applyPatch(input, patch);
+    return input;
   }
 
   #getResourceAccessPolicy(resourceType: string): AccessPolicyResource | undefined {
@@ -1834,6 +2065,17 @@ async function getCacheEntry<T extends Resource>(resourceType: string, id: strin
 }
 
 /**
+ * Performs a bulk read of cache entries from Redis.
+ * @param references Array of FHIR references.
+ * @returns Array of cache entries or undefined.
+ */
+async function getCacheEntries(references: Reference[]): Promise<(CacheEntry<Resource> | undefined)[]> {
+  return (await getRedis().mget(...references.map((r) => r.reference as string))).map((cachedValue) =>
+    cachedValue ? (JSON.parse(cachedValue) as CacheEntry<Resource>) : undefined
+  );
+}
+
+/**
  * Writes a cache entry to Redis.
  * @param resource The resource to cache.
  */
@@ -1874,6 +2116,7 @@ function fhirOperatorToSqlOperator(fhirOperator: FhirOperator): Operator {
   switch (fhirOperator) {
     case FhirOperator.EQUALS:
       return Operator.EQUALS;
+    case FhirOperator.NOT:
     case FhirOperator.NOT_EQUALS:
       return Operator.NOT_EQUALS;
     case FhirOperator.GREATER_THAN:
@@ -1889,68 +2132,6 @@ function fhirOperatorToSqlOperator(fhirOperator: FhirOperator): Operator {
     default:
       throw new Error(`Unknown FHIR operator: ${fhirOperator}`);
   }
-}
-
-/**
- * Creates a repository object for the user login object.
- * Individual instances of the Repository class manage access rights to resources.
- * Login instances contain details about user compartments.
- * This method ensures that the repository is setup correctly.
- * @param login The user login.
- * @param membership The active project membership.
- * @param strictMode Optional flag to enable strict mode for in-depth FHIR schema validation.
- * @param extendedMode Optional flag to enable extended mode for custom Medplum properties.
- * @param checkReferencesOnWrite Optional flag to enable reference checking on write.
- * @returns A repository configured for the login details.
- */
-export async function getRepoForLogin(
-  login: Login,
-  membership: ProjectMembership,
-  strictMode?: boolean,
-  extendedMode?: boolean,
-  checkReferencesOnWrite?: boolean
-): Promise<Repository> {
-  let accessPolicy: AccessPolicy | undefined = undefined;
-
-  if (membership.accessPolicy) {
-    accessPolicy = await systemRepo.readReference(membership.accessPolicy);
-    accessPolicy = setupAccessPolicy(accessPolicy, membership.profile as Reference<ProfileResource>);
-  }
-
-  if (login.scope) {
-    // If the login specifies SMART scopes,
-    // then set the access policy to use those scopes
-    accessPolicy = applySmartScopes(accessPolicy, login.scope);
-  }
-
-  return new Repository({
-    project: resolveId(membership.project) as string,
-    author: membership.profile as Reference,
-    remoteAddress: login.remoteAddress,
-    superAdmin: login.superAdmin,
-    accessPolicy,
-    strictMode,
-    extendedMode,
-    checkReferencesOnWrite,
-  });
-}
-
-/**
- * Sets up an AccessPolicy by resolving variables.
- * @param original The original AccessPolicy.
- * @param profile The user profile.
- * @returns The AccessPolicy with variables resolved.
- */
-function setupAccessPolicy(original: AccessPolicy, profile: Reference<ProfileResource>): AccessPolicy {
-  const profileReference = profile.reference as string;
-  const profileId = resolveId(profile) as string;
-  const templateJson = JSON.stringify(original);
-  const policyJson = templateJson
-    .replaceAll('%patient.id', profileId)
-    .replaceAll('%profile.id', profileId)
-    .replaceAll('%patient', profileReference)
-    .replaceAll('%profile', profileReference);
-  return JSON.parse(policyJson) as AccessPolicy;
 }
 
 export const systemRepo = new Repository({

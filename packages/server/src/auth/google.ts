@@ -1,5 +1,5 @@
 import { badRequest, Operator } from '@medplum/core';
-import { ClientApplication, Project, User } from '@medplum/fhirtypes';
+import { ClientApplication, Project, ResourceType, User } from '@medplum/fhirtypes';
 import { randomUUID } from 'crypto';
 import { Request, Response } from 'express';
 import { body, validationResult } from 'express-validator';
@@ -9,6 +9,7 @@ import { getConfig } from '../config';
 import { invalidRequest, sendOutcome } from '../fhir/outcomes';
 import { systemRepo } from '../fhir/repo';
 import { getUserByEmail, GoogleCredentialClaims, tryLogin } from '../oauth/utils';
+import { isExternalAuth } from './method';
 import { sendLoginResult } from './utils';
 
 /*
@@ -48,7 +49,7 @@ export async function googleHandler(req: Request, res: Response): Promise<void> 
   // Resource type can optionally be specified.
   // If specified, only memberships of that type will be returned.
   // If not specified, all memberships will be considered.
-  const resourceType = req.body.resourceType as string | undefined;
+  const resourceType = req.body.resourceType as ResourceType | undefined;
 
   // Project ID can come from one of three sources
   // 1) Passed in explicitly as projectId
@@ -106,6 +107,12 @@ export async function googleHandler(req: Request, res: Response): Promise<void> 
 
   const claims = result.payload as GoogleCredentialClaims;
 
+  const externalAuth = await isExternalAuth(claims.email);
+  if (externalAuth) {
+    res.status(200).json(externalAuth);
+    return;
+  }
+
   const existingUser = await getUserByEmail(claims.email, projectId);
   if (!existingUser) {
     if (!req.body.createUser) {
@@ -137,7 +144,7 @@ export async function googleHandler(req: Request, res: Response): Promise<void> 
     remoteAddress: req.ip,
     userAgent: req.get('User-Agent'),
   });
-  await sendLoginResult(res, login, projectId, resourceType);
+  await sendLoginResult(res, login);
 }
 
 async function getProjectByGoogleClientId(googleClientId: string): Promise<Project | undefined> {

@@ -1,5 +1,5 @@
 ---
-sidebar_position: 1
+sidebar_position: 2
 toc_max_heading_level: 2
 ---
 
@@ -159,6 +159,17 @@ MEDPLUM_CLIENT_SECRET=<YOUR_CLIENT_SECRET>
 `MEDPLUM_CLIENT_ID` and `MEDPLUM_CLIENT_SECRET` should be considered sensitive security credentials and should never be shared in a publicly accessible store. The `medplum-demo-bots` repository adds `.env` to `.gitignore` by default.
 
 :::
+
+If you are self-hosting Medplum, set `MEDPLUM_BASE_URL` to the base URL of your Medplum server as an environment variable or in your .env file.
+
+```bash
+export MEDPLUM_BASE_URL=https://api.example.com/
+```
+
+```bash
+# .env
+MEDPLUM_BASE_URL=https://api.example.com/
+```
 
 ## Deploying your Bot
 

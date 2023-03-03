@@ -1,6 +1,7 @@
 export * from './AddressDisplay/AddressDisplay';
 export * from './AddressInput/AddressInput';
 export * from './AnnotationInput/AnnotationInput';
+export * from './AsyncAutocomplete/AsyncAutocomplete';
 export * from './AttachmentArrayDisplay/AttachmentArrayDisplay';
 export * from './AttachmentArrayInput/AttachmentArrayInput';
 export * from './AttachmentButton/AttachmentButton';
@@ -40,6 +41,9 @@ export * from './IdentifierInput/IdentifierInput';
 export * from './Logo/Logo';
 export * from './MedplumLink/MedplumLink';
 export * from './MedplumProvider/MedplumProvider';
+export * from './MoneyDisplay/MoneyDisplay';
+export * from './MoneyInput/MoneyInput';
+export * from './OperationOutcomeAlert/OperationOutcomeAlert';
 export * from './Panel/Panel';
 export * from './PatientTimeline/PatientTimeline';
 export * from './PlanDefinitionBuilder/PlanDefinitionBuilder';

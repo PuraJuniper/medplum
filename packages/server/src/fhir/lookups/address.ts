@@ -86,12 +86,13 @@ export class AddressTable extends LookupTable<Address> {
       return;
     }
 
+    const resourceType = resource.resourceType;
     const resourceId = resource.id as string;
-    const existing = await this.getExistingValues(resourceId);
+    const existing = await this.getExistingValues(client, resourceType, resourceId);
 
     if (!compareArrays(addresses, existing)) {
       if (existing.length > 0) {
-        await this.deleteValuesForResource(resource);
+        await this.deleteValuesForResource(client, resource);
       }
 
       const values = [];
@@ -112,7 +113,7 @@ export class AddressTable extends LookupTable<Address> {
         });
       }
 
-      await this.insertValuesForResource(client, values);
+      await this.insertValuesForResource(client, resourceType, values);
     }
   }
 

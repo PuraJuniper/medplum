@@ -1,4 +1,16 @@
-import { createReference, getReferenceString, isOk, normalizeErrorString, Operator } from '@medplum/core';
+import {
+  createReference,
+  forbidden,
+  getReferenceString,
+  isOk,
+  normalizeErrorString,
+  notFound,
+  OperationOutcomeError,
+  Operator,
+  parseSearchRequest,
+  parseSearchUrl,
+  SearchRequest,
+} from '@medplum/core';
 import {
   AllergyIntolerance,
   Appointment,
@@ -6,10 +18,15 @@ import {
   Bundle,
   BundleEntry,
   Communication,
+  Condition,
+  DiagnosticReport,
   Encounter,
+  Login,
   Observation,
   OperationOutcome,
   Patient,
+  Practitioner,
+  Provenance,
   Questionnaire,
   QuestionnaireResponse,
   ResourceType,
@@ -22,9 +39,8 @@ import { initAppServices, shutdownApp } from '../app';
 import { registerNew, RegisterRequest } from '../auth/register';
 import { loadTestConfig } from '../config';
 import { bundleContains } from '../test.setup';
-import { processBatch } from './batch';
-import { getRepoForLogin, Repository, systemRepo } from './repo';
-import { parseSearchRequest } from './search';
+import { getRepoForLogin } from './accesspolicy';
+import { Repository, systemRepo } from './repo';
 
 jest.mock('hibp');
 jest.mock('ioredis');
@@ -50,7 +66,7 @@ describe('FHIR Repo', () => {
       await systemRepo.readResource('Patient', undefined as unknown as string);
       fail('Should have thrown');
     } catch (err) {
-      const outcome = err as OperationOutcome;
+      const outcome = (err as OperationOutcomeError).outcome;
       expect(isOk(outcome)).toBe(false);
     }
   });
@@ -60,7 +76,7 @@ describe('FHIR Repo', () => {
       await systemRepo.readResource('Patient', '');
       fail('Should have thrown');
     } catch (err) {
-      const outcome = err as OperationOutcome;
+      const outcome = (err as OperationOutcomeError).outcome;
       expect(isOk(outcome)).toBe(false);
     }
   });
@@ -70,7 +86,7 @@ describe('FHIR Repo', () => {
       await systemRepo.readResource('Patient', 'x');
       fail('Should have thrown');
     } catch (err) {
-      const outcome = err as OperationOutcome;
+      const outcome = (err as OperationOutcomeError).outcome;
       expect(isOk(outcome)).toBe(false);
     }
   });
@@ -281,7 +297,7 @@ describe('FHIR Repo', () => {
         name: [{ given: ['Alice'], family: 'Smith' }],
       });
     } catch (err) {
-      const outcome = err as OperationOutcome;
+      const outcome = (err as OperationOutcomeError).outcome;
       expect(outcome.id).toEqual('not-found');
     }
   });
@@ -723,34 +739,15 @@ describe('FHIR Repo', () => {
   });
 
   test('Filter and sort on same search parameter', async () => {
-    const createBundle = await processBatch(systemRepo, {
-      resourceType: 'Bundle',
-      type: 'batch',
-      entry: [
-        {
-          request: {
-            method: 'POST',
-            url: 'Patient',
-          },
-          resource: {
-            resourceType: 'Patient',
-            name: [{ given: ['Marge'], family: 'Simpson' }],
-          },
-        },
-        {
-          request: {
-            method: 'POST',
-            url: 'Patient',
-          },
-          resource: {
-            resourceType: 'Patient',
-            name: [{ given: ['Homer'], family: 'Simpson' }],
-          },
-        },
-      ],
+    await systemRepo.createResource<Patient>({
+      resourceType: 'Patient',
+      name: [{ given: ['Marge'], family: 'Simpson' }],
     });
 
-    expect(createBundle).toBeDefined();
+    await systemRepo.createResource<Patient>({
+      resourceType: 'Patient',
+      name: [{ given: ['Homer'], family: 'Simpson' }],
+    });
 
     const bundle = await systemRepo.search({
       resourceType: 'Patient',
@@ -802,8 +799,7 @@ describe('FHIR Repo', () => {
       await repo2.readResource('Patient', patient1?.id as string);
       fail('Should have thrown');
     } catch (err) {
-      const outcome = err as OperationOutcome;
-      expect(outcome.id).toEqual('not-found');
+      expect((err as OperationOutcomeError).outcome).toMatchObject(notFound);
     }
   });
 
@@ -1310,45 +1306,28 @@ describe('FHIR Repo', () => {
       name: [{ given: ['John'], family: 'CodeableConcept' }],
     });
 
-    // Use code.coding[0].code
     const serviceRequest1 = await systemRepo.createResource<ServiceRequest>({
       resourceType: 'ServiceRequest',
       status: 'active',
       intent: 'order',
       subject: createReference(patient),
-      code: {
-        coding: [
-          {
-            code: x1,
-          },
-        ],
-      },
+      code: { coding: [{ code: x1 }] },
     });
 
-    // Use code.coding[0].display
     const serviceRequest2 = await systemRepo.createResource<ServiceRequest>({
       resourceType: 'ServiceRequest',
       status: 'active',
       intent: 'order',
       subject: createReference(patient),
-      code: {
-        coding: [
-          {
-            display: x2,
-          },
-        ],
-      },
+      code: { coding: [{ code: x2 }] },
     });
 
-    // Use code.text
     const serviceRequest3 = await systemRepo.createResource<ServiceRequest>({
       resourceType: 'ServiceRequest',
       status: 'active',
       intent: 'order',
       subject: createReference(patient),
-      code: {
-        text: x3,
-      },
+      code: { coding: [{ code: x3 }] },
     });
 
     const bundle1 = await systemRepo.search({
@@ -1821,7 +1800,7 @@ describe('FHIR Repo', () => {
     const appt1 = await systemRepo.createResource<Appointment>({
       resourceType: 'Appointment',
       status: 'booked',
-      serviceType: [{ text: code }],
+      serviceType: [{ coding: [{ code }] }],
       participant: [{ status: 'accepted' }],
       start: nowMinus1Second.toISOString(),
     });
@@ -1830,7 +1809,7 @@ describe('FHIR Repo', () => {
     const appt2 = await systemRepo.createResource<Appointment>({
       resourceType: 'Appointment',
       status: 'booked',
-      serviceType: [{ text: code }],
+      serviceType: [{ coding: [{ code }] }],
       participant: [{ status: 'accepted' }],
       start: nowMinus2Seconds.toISOString(),
     });
@@ -1949,7 +1928,7 @@ describe('FHIR Repo', () => {
         name: [{ family: `Test too many requests` }],
       });
     } catch (err) {
-      const outcome = err as OperationOutcome;
+      const outcome = (err as OperationOutcomeError).outcome;
       expect(outcome.id).toEqual('too-many-requests');
     }
   });
@@ -1993,8 +1972,8 @@ describe('FHIR Repo', () => {
           status: 'active',
           intent: 'order',
           subject: { reference: 'Patient/' + randomUUID() },
-          category: [{ text: category }],
-          code: { text: randomUUID() },
+          category: [{ coding: [{ code: category }] }],
+          code: { coding: [{ code: randomUUID() }] },
         })
       );
     }
@@ -2012,7 +1991,7 @@ describe('FHIR Repo', () => {
         {
           code: 'code',
           operator: Operator.NOT_EQUALS,
-          value: serviceRequests[0].code.text + ',' + serviceRequests[1].code.text,
+          value: serviceRequests[0].code.coding[0].code + ',' + serviceRequests[1].code.coding[0].code,
         },
       ],
     });
@@ -2061,7 +2040,7 @@ describe('FHIR Repo', () => {
         ],
       });
     } catch (err) {
-      const outcome = err as OperationOutcome;
+      const outcome = (err as OperationOutcomeError).outcome;
       expect(outcome.issue?.[0]?.details?.text).toEqual('Unknown search parameter: basedOn');
     }
   });
@@ -2121,14 +2100,335 @@ describe('FHIR Repo', () => {
   });
 
   test('Reverse include Provenance', async () => {
-    const searchResult = await systemRepo.search({
-      resourceType: 'Practitioner',
-      revInclude: 'Provenance:target',
-    });
-    expect(searchResult.entry).not.toHaveLength(0);
+    const family = randomUUID();
 
-    const provenanceEntry = searchResult.entry?.find((entry) => entry.resource?.resourceType === 'Provenance');
-    expect(provenanceEntry).toBeDefined();
-    expect(provenanceEntry?.search?.mode).toEqual('include');
+    const practitioner1 = await systemRepo.createResource<Practitioner>({
+      resourceType: 'Practitioner',
+      name: [{ given: ['Homer'], family }],
+    });
+
+    const practitioner2 = await systemRepo.createResource<Practitioner>({
+      resourceType: 'Practitioner',
+      name: [{ given: ['Marge'], family }],
+    });
+
+    const searchRequest: SearchRequest = {
+      resourceType: 'Practitioner',
+      filters: [{ code: 'name', operator: Operator.EQUALS, value: family }],
+      revInclude: 'Provenance:target',
+    };
+
+    const searchResult1 = await systemRepo.search(searchRequest);
+    expect(searchResult1.entry).toHaveLength(2);
+    expect(bundleContains(searchResult1, practitioner1)).toBeTruthy();
+    expect(bundleContains(searchResult1, practitioner2)).toBeTruthy();
+
+    const provenance1 = await systemRepo.createResource<Provenance>({
+      resourceType: 'Provenance',
+      target: [createReference(practitioner1)],
+      agent: [{ who: createReference(practitioner1) }],
+      recorded: new Date().toISOString(),
+    });
+
+    const provenance2 = await systemRepo.createResource<Provenance>({
+      resourceType: 'Provenance',
+      target: [createReference(practitioner2)],
+      agent: [{ who: createReference(practitioner2) }],
+      recorded: new Date().toISOString(),
+    });
+
+    const searchResult2 = await systemRepo.search(searchRequest);
+    expect(searchResult2.entry).toHaveLength(4);
+    expect(bundleContains(searchResult2, practitioner1)).toBeTruthy();
+    expect(bundleContains(searchResult2, practitioner2)).toBeTruthy();
+    expect(bundleContains(searchResult2, provenance1)).toBeTruthy();
+    expect(bundleContains(searchResult2, provenance2)).toBeTruthy();
+  });
+
+  test('DiagnosticReport category with system', async () => {
+    const code = randomUUID();
+    const dr = await systemRepo.createResource<DiagnosticReport>({
+      resourceType: 'DiagnosticReport',
+      status: 'final',
+      code: { coding: [{ code }] },
+      category: [{ coding: [{ system: 'http://loinc.org', code: 'LP217198-3' }] }],
+    });
+
+    const bundle = await systemRepo.search({
+      resourceType: 'DiagnosticReport',
+      filters: [
+        {
+          code: 'code',
+          operator: Operator.EQUALS,
+          value: code,
+        },
+        {
+          code: 'category',
+          operator: Operator.EQUALS,
+          value: 'http://loinc.org|LP217198-3',
+        },
+      ],
+      count: 1,
+    });
+
+    expect(bundleContains(bundle, dr)).toBeTruthy();
+  });
+
+  test('Encounter.period date search', async () => {
+    const e = await systemRepo.createResource<Encounter>({
+      resourceType: 'Encounter',
+      identifier: [{ value: randomUUID() }],
+      status: 'finished',
+      class: { code: 'test' },
+      period: {
+        start: '2020-02-01',
+        end: '2020-02-02',
+      },
+    });
+
+    const bundle = await systemRepo.search({
+      resourceType: 'Encounter',
+      filters: [
+        {
+          code: 'identifier',
+          operator: Operator.EQUALS,
+          value: e.identifier?.[0]?.value as string,
+        },
+        {
+          code: 'date',
+          operator: Operator.GREATER_THAN,
+          value: '2020-01-01',
+        },
+      ],
+      count: 1,
+    });
+
+    expect(bundleContains(bundle, e)).toBeTruthy();
+  });
+
+  test('Condition.code system search', async () => {
+    const p = await systemRepo.createResource({
+      resourceType: 'Patient',
+      name: [{ family: randomUUID() }],
+    });
+
+    const c1 = await systemRepo.createResource<Condition>({
+      resourceType: 'Condition',
+      subject: createReference(p),
+      code: { coding: [{ system: 'http://snomed.info/sct', code: '165002' }] },
+    });
+
+    const c2 = await systemRepo.createResource<Condition>({
+      resourceType: 'Condition',
+      subject: createReference(p),
+      code: { coding: [{ system: 'https://example.com', code: 'test' }] },
+    });
+
+    const bundle = await systemRepo.search({
+      resourceType: 'Condition',
+      filters: [
+        {
+          code: 'subject',
+          operator: Operator.EQUALS,
+          value: getReferenceString(p),
+        },
+        {
+          code: 'code',
+          operator: Operator.EQUALS,
+          value: 'http://snomed.info/sct|',
+        },
+      ],
+    });
+
+    expect(bundle.entry?.length).toEqual(1);
+    expect(bundleContains(bundle, c1)).toBeTruthy();
+    expect(bundleContains(bundle, c2)).not.toBeTruthy();
+  });
+
+  test('Condition.code :not next URL', async () => {
+    const p = await systemRepo.createResource({
+      resourceType: 'Patient',
+      name: [{ family: randomUUID() }],
+    });
+
+    await systemRepo.createResource<Condition>({
+      resourceType: 'Condition',
+      subject: createReference(p),
+      code: { coding: [{ system: 'http://snomed.info/sct', code: '165002' }] },
+    });
+
+    await systemRepo.createResource<Condition>({
+      resourceType: 'Condition',
+      subject: createReference(p),
+      code: { coding: [{ system: 'https://example.com', code: 'test' }] },
+    });
+
+    const bundle = await systemRepo.search(
+      parseSearchUrl(
+        new URL(`https://x/Condition?subject=${getReferenceString(p)}&code:not=x&_count=1&_total=accurate`)
+      )
+    );
+    expect(bundle.entry?.length).toEqual(1);
+
+    const nextUrl = bundle.link?.find((l) => l.relation === 'next')?.url;
+    expect(nextUrl).toBeDefined();
+    expect(nextUrl).toContain('code:not=x');
+  });
+
+  test('Condition.code :in search', async () => {
+    // ValueSet: http://hl7.org/fhir/ValueSet/condition-code
+    // compose includes codes from http://snomed.info/sct
+    // but does not include codes from https://example.com
+
+    const p = await systemRepo.createResource({
+      resourceType: 'Patient',
+      name: [{ family: randomUUID() }],
+    });
+
+    const c1 = await systemRepo.createResource<Condition>({
+      resourceType: 'Condition',
+      subject: createReference(p),
+      code: { coding: [{ system: 'http://snomed.info/sct', code: '165002' }] },
+    });
+
+    const c2 = await systemRepo.createResource<Condition>({
+      resourceType: 'Condition',
+      subject: createReference(p),
+      code: { coding: [{ system: 'https://example.com', code: 'test' }] },
+    });
+
+    const bundle = await systemRepo.search({
+      resourceType: 'Condition',
+      filters: [
+        {
+          code: 'subject',
+          operator: Operator.EQUALS,
+          value: getReferenceString(p),
+        },
+        {
+          code: 'code',
+          operator: Operator.IN,
+          value: 'http://hl7.org/fhir/ValueSet/condition-code',
+        },
+      ],
+    });
+
+    expect(bundle.entry?.length).toEqual(1);
+    expect(bundleContains(bundle, c1)).toBeTruthy();
+    expect(bundleContains(bundle, c2)).not.toBeTruthy();
+  });
+
+  test('Purge forbidden', async () => {
+    const author = 'Practitioner/' + randomUUID();
+
+    const repo = new Repository({
+      project: randomUUID(),
+      extendedMode: true,
+      author: {
+        reference: author,
+      },
+    });
+
+    // Try to purge as a regular user
+    try {
+      await repo.purgeResources('Patient', new Date().toISOString());
+      fail('Purge should have failed');
+    } catch (err) {
+      expect((err as OperationOutcomeError).outcome).toMatchObject(forbidden);
+    }
+  });
+
+  test('Purge Login', async () => {
+    const oldDate = '2000-01-01T00:00:00.000Z';
+
+    // Create a login using super admin with a date in the distant past
+    // This takes advantage of the fact that super admins can set meta.lastUpdated
+    const login = await systemRepo.createResource<Login>({
+      resourceType: 'Login',
+      meta: {
+        lastUpdated: oldDate,
+      },
+      user: { reference: 'system' },
+      authMethod: 'password',
+      authTime: oldDate,
+    });
+
+    const bundle1 = await systemRepo.search({
+      resourceType: 'Login',
+      filters: [{ code: '_lastUpdated', operator: Operator.LESS_THAN_OR_EQUALS, value: oldDate }],
+    });
+    expect(bundleContains(bundle1, login)).toBeTruthy();
+
+    // Purge logins before the cutoff date
+    await systemRepo.purgeResources('Login', oldDate);
+
+    // Make sure the login is truly gone
+    const bundle = await systemRepo.search({
+      resourceType: 'Login',
+      filters: [{ code: '_lastUpdated', operator: Operator.ENDS_BEFORE, value: oldDate }],
+      total: 'accurate',
+      count: 0,
+    });
+    expect(bundle.total).toEqual(0);
+  });
+
+  test('Resource search params', async () => {
+    const patient = await systemRepo.createResource<Patient>({
+      resourceType: 'Patient',
+      meta: {
+        profile: ['http://hl7.org/fhir/us/core/StructureDefinition/us-core-patient'],
+        security: [{ system: 'http://hl7.org/fhir/v3/Confidentiality', code: 'N' }],
+        source: 'http://example.org',
+        tag: [{ system: 'http://hl7.org/fhir/v3/ObservationValue', code: 'SUBSETTED' }],
+      },
+    });
+
+    const bundle1 = await systemRepo.search({
+      resourceType: 'Patient',
+      filters: [
+        {
+          code: '_profile',
+          operator: Operator.EQUALS,
+          value: 'http://hl7.org/fhir/us/core/StructureDefinition/us-core-patient',
+        },
+      ],
+    });
+    expect(bundleContains(bundle1, patient)).toBeTruthy();
+
+    const bundle2 = await systemRepo.search({
+      resourceType: 'Patient',
+      filters: [
+        {
+          code: '_security',
+          operator: Operator.EQUALS,
+          value: 'http://hl7.org/fhir/v3/Confidentiality|N',
+        },
+      ],
+    });
+    expect(bundleContains(bundle2, patient)).toBeTruthy();
+
+    const bundle3 = await systemRepo.search({
+      resourceType: 'Patient',
+      filters: [
+        {
+          code: '_source',
+          operator: Operator.EQUALS,
+          value: 'http://example.org',
+        },
+      ],
+    });
+    expect(bundleContains(bundle3, patient)).toBeTruthy();
+
+    const bundle4 = await systemRepo.search({
+      resourceType: 'Patient',
+      filters: [
+        {
+          code: '_tag',
+          operator: Operator.EQUALS,
+          value: 'http://hl7.org/fhir/v3/ObservationValue|SUBSETTED',
+        },
+      ],
+    });
+    expect(bundleContains(bundle4, patient)).toBeTruthy();
   });
 });

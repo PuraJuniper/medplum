@@ -1,23 +1,30 @@
-import { createReference, getExtensionValue, isGone, matchesSearchRequest, Operator, stringify } from '@medplum/core';
+import {
+  createReference,
+  getExtensionValue,
+  isGone,
+  matchesSearchRequest,
+  normalizeOperationOutcome,
+  Operator,
+  parseSearchUrl,
+  stringify,
+} from '@medplum/core';
 import {
   AuditEvent,
   Bot,
   BundleEntry,
-  OperationOutcome,
   Practitioner,
   ProjectMembership,
   Reference,
   Resource,
   Subscription,
 } from '@medplum/fhirtypes';
-import { Job, Queue, QueueBaseOptions, QueueScheduler, Worker } from 'bullmq';
+import { Job, Queue, QueueBaseOptions, Worker } from 'bullmq';
 import { createHmac } from 'crypto';
 import fetch, { HeadersInit } from 'node-fetch';
 import { URL } from 'url';
 import { MedplumRedisConfig } from '../config';
 import { executeBot } from '../fhir/operations/execute';
 import { systemRepo } from '../fhir/repo';
-import { parseSearchUrl } from '../fhir/search';
 import { logger } from '../logger';
 import { AuditEventOutcome } from '../util/auditevent';
 
@@ -38,7 +45,6 @@ export interface SubscriptionJobData {
 
 const queueName = 'SubscriptionQueue';
 const jobName = 'SubscriptionJobData';
-let queueScheduler: QueueScheduler | undefined = undefined;
 let queue: Queue<SubscriptionJobData> | undefined = undefined;
 let worker: Worker<SubscriptionJobData> | undefined = undefined;
 
@@ -51,8 +57,6 @@ export function initSubscriptionWorker(config: MedplumRedisConfig): void {
   const defaultOptions: QueueBaseOptions = {
     connection: config,
   };
-
-  queueScheduler = new QueueScheduler(queueName, defaultOptions);
 
   queue = new Queue<SubscriptionJobData>(queueName, {
     ...defaultOptions,
@@ -67,7 +71,7 @@ export function initSubscriptionWorker(config: MedplumRedisConfig): void {
 
   worker = new Worker<SubscriptionJobData>(queueName, execSubscriptionJob, defaultOptions);
   worker.on('completed', (job) => logger.info(`Completed job ${job.id} successfully`));
-  worker.on('failed', (job, err) => logger.info(`Failed job ${job.id} with ${err}`));
+  worker.on('failed', (job, err) => logger.info(`Failed job ${job?.id} with ${err}`));
 }
 
 /**
@@ -76,11 +80,6 @@ export function initSubscriptionWorker(config: MedplumRedisConfig): void {
  * Clsoes the BullMQ worker.
  */
 export async function closeSubscriptionWorker(): Promise<void> {
-  if (queueScheduler) {
-    await queueScheduler.close();
-    queueScheduler = undefined;
-  }
-
   if (queue) {
     await queue.close();
     queue = undefined;
@@ -239,7 +238,8 @@ export async function execSubscriptionJob(job: Job<SubscriptionJobData>): Promis
   try {
     subscription = await systemRepo.readResource<Subscription>('Subscription', subscriptionId);
   } catch (err) {
-    if (isGone(err as OperationOutcome)) {
+    const outcome = normalizeOperationOutcome(err);
+    if (isGone(outcome)) {
       // If the subscription was deleted, then stop processing it.
       return;
     }
@@ -256,7 +256,8 @@ export async function execSubscriptionJob(job: Job<SubscriptionJobData>): Promis
   try {
     currentVersion = await systemRepo.readResource(resourceType, id);
   } catch (err) {
-    if (isGone(err as OperationOutcome)) {
+    const outcome = normalizeOperationOutcome(err);
+    if (isGone(outcome)) {
       // If the resource was deleted, then stop processing it.
       return;
     }

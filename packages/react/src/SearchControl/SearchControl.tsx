@@ -27,7 +27,7 @@ import {
   IconFilter,
   IconTableExport,
   IconTrash,
-} from '@tabler/icons';
+} from '@tabler/icons-react';
 import React, { useEffect, useRef, useState } from 'react';
 import { Container } from '../Container/Container';
 import { useMedplum } from '../MedplumProvider/MedplumProvider';
@@ -461,7 +461,7 @@ export function SearchControl(props: SearchControlProps): JSX.Element {
       </Table>
       {resources?.length === 0 && (
         <Container>
-          <Center>
+          <Center style={{ height: 150 }}>
             <Text size="xl" color="dimmed">
               No results
             </Text>

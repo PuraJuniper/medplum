@@ -7,21 +7,14 @@ import {
   NewPatientRequest,
   NewProjectRequest,
   NewUserRequest,
-  notFound,
+  OperationOutcomeError,
 } from '@medplum/core';
 import { readJson } from '@medplum/definitions';
-import {
-  Bundle,
-  CodeableConcept,
-  OperationOutcome,
-  Patient,
-  SearchParameter,
-  ServiceRequest,
-} from '@medplum/fhirtypes';
+import { Bundle, CodeableConcept, Patient, SearchParameter, ServiceRequest } from '@medplum/fhirtypes';
 import { randomUUID, webcrypto } from 'crypto';
 import { TextEncoder } from 'util';
 import { MockClient } from './client';
-import { DrAliceSmithSchedule, HomerSimpson } from './mocks';
+import { DrAliceSmith, DrAliceSmithSchedule, HomerSimpson } from './mocks';
 
 describe('MockClient', () => {
   beforeAll(() => {
@@ -179,7 +172,17 @@ describe('MockClient', () => {
 
   test('Who am i', async () => {
     const client = new MockClient();
-    expect(await client.get('auth/me')).toMatchObject({ profile: { reference: 'Practitioner/123' } });
+    expect(await client.get('auth/me')).toMatchObject({ profile: DrAliceSmith });
+  });
+
+  test('MFA status', async () => {
+    const client = new MockClient();
+    expect(await client.get('auth/mfa/status')).toMatchObject({ enrolled: false });
+  });
+
+  test('MFA enroll', async () => {
+    const client = new MockClient();
+    expect(await client.post('auth/mfa/enroll', { token: 'foo' })).toMatchObject(allOk);
   });
 
   test('Batch request', async () => {
@@ -189,6 +192,7 @@ describe('MockClient', () => {
         'fhir/R4',
         JSON.stringify({
           resourceType: 'Bundle',
+          type: 'batch',
           entry: [
             {
               request: {
@@ -226,7 +230,6 @@ describe('MockClient', () => {
           },
         },
         {
-          resource: notFound,
           response: {
             status: '404',
           },
@@ -237,7 +240,7 @@ describe('MockClient', () => {
             name: [{ given: ['John'], family: 'Doe' }],
           },
           response: {
-            status: '200',
+            status: '201',
           },
         },
       ],
@@ -333,7 +336,8 @@ describe('MockClient', () => {
       await client.readResource('Patient', randomUUID());
       fail('Expected error');
     } catch (err) {
-      expect((err as OperationOutcome).id).toEqual('not-found');
+      const outcome = (err as OperationOutcomeError).outcome;
+      expect(outcome.id).toEqual('not-found');
     }
   });
 
@@ -352,7 +356,8 @@ describe('MockClient', () => {
       await client.readHistory('Patient', randomUUID());
       fail('Expected error');
     } catch (err) {
-      expect((err as OperationOutcome).id).toEqual('not-found');
+      const outcome = (err as OperationOutcomeError).outcome;
+      expect(outcome.id).toEqual('not-found');
     }
   });
 
@@ -374,7 +379,8 @@ describe('MockClient', () => {
       await client.readVersion('Patient', resource1.id as string, randomUUID());
       fail('Expected error');
     } catch (err) {
-      expect((err as OperationOutcome).id).toEqual('not-found');
+      const outcome = (err as OperationOutcomeError).outcome;
+      expect(outcome.id).toEqual('not-found');
     }
   });
 
@@ -410,6 +416,57 @@ describe('MockClient', () => {
     expect(resource2).toBeDefined();
     expect(resource2.id).toEqual(resource1.id);
     expect(resource2.meta?.versionId).not.toEqual(resource1.meta?.versionId);
+  });
+
+  test('Patch resource preserves original', async () => {
+    const client = new MockClient();
+
+    const resource1 = await client.createResource<Patient>({
+      resourceType: 'Patient',
+      name: [{ given: ['Homer'], family: 'Simpson' }],
+    });
+    expect(resource1).toBeDefined();
+
+    const resource2 = await client.patchResource('Patient', resource1.id as string, [
+      {
+        op: 'replace',
+        path: '/name/0/given/0',
+        value: 'Marge',
+      },
+    ]);
+    expect(resource2).toBeDefined();
+    expect(resource2.name?.[0].given?.[0]).toEqual('Marge');
+    expect(resource1.name?.[0].given?.[0]).toEqual('Homer');
+    expect(resource2.meta?.versionId).not.toEqual(resource1.meta?.versionId);
+  });
+
+  test('Patch resource errors', async () => {
+    const client = new MockClient();
+
+    const resource1 = await client.createResource<Patient>({
+      resourceType: 'Patient',
+      name: [{ given: ['Bart'], family: 'Simpson' }],
+    });
+    expect(resource1).toBeDefined();
+
+    try {
+      await client.patchResource('Patient', resource1.id as string, [
+        {
+          op: 'test',
+          path: '/name/0/given/0',
+          value: 'Homer',
+        },
+        {
+          op: 'replace',
+          path: '/name/0/given/0',
+          value: 'Marge',
+        },
+      ]);
+      fail('Expected error');
+    } catch (err) {
+      const outcome = (err as OperationOutcomeError).outcome;
+      expect(outcome.issue?.[0].details?.text).toEqual('Test failed: Bart != Homer');
+    }
   });
 
   test('Preserve history', async () => {
@@ -455,7 +512,8 @@ describe('MockClient', () => {
       await client.readResource('Patient', resource1.id as string);
       fail('Should have thrown');
     } catch (err) {
-      expect((err as OperationOutcome).id).toEqual('not-found');
+      const outcome = (err as OperationOutcomeError).outcome;
+      expect(outcome.id).toEqual('not-found');
     }
   });
 

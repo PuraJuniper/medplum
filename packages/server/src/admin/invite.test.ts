@@ -8,7 +8,7 @@ import request from 'supertest';
 import { initApp, shutdownApp } from '../app';
 import { registerNew } from '../auth/register';
 import { loadTestConfig } from '../config';
-import { setupPwnedPasswordMock, setupRecaptchaMock } from '../test.setup';
+import { addTestUser, setupPwnedPasswordMock, setupRecaptchaMock } from '../test.setup';
 
 jest.mock('@aws-sdk/client-sesv2');
 jest.mock('hibp');
@@ -163,14 +163,8 @@ describe('Admin Invite', () => {
       password: 'password!@#',
     });
 
-    // Second, Bob creates a project
-    const bobRegistration = await registerNew({
-      firstName: 'Bob',
-      lastName: 'Jones',
-      projectName: 'Bob Project',
-      email: `bob${randomUUID()}@example.com`,
-      password: 'password!@#',
-    });
+    // Second, Alice invites Bob to project
+    const bobRegistration = await addTestUser(aliceRegistration.project);
 
     // Third, Bob tries to invite Carol to Alice's project
     // In this example, Bob is not an admin of Alice's project
@@ -245,5 +239,89 @@ describe('Admin Invite', () => {
     expect(res2.status).toBe(200);
     expect(SESv2Client).toHaveBeenCalledTimes(0);
     expect(SendEmailCommand).toHaveBeenCalledTimes(0);
+  });
+
+  test('Invite by externalId', async () => {
+    // First, Alice creates a project
+    const { project, accessToken } = await registerNew({
+      firstName: 'Alice',
+      lastName: 'Smith',
+      projectName: 'Alice Project',
+      email: `alice${randomUUID()}@example.com`,
+      password: 'password!@#',
+    });
+
+    // Second, Alice invites Bob to the project
+    const bobSub = randomUUID();
+    const res2 = await request(app)
+      .post('/admin/projects/' + project.id + '/invite')
+      .set('Authorization', 'Bearer ' + accessToken)
+      .send({
+        resourceType: 'Patient',
+        firstName: 'Bob',
+        lastName: 'Jones',
+        externalId: bobSub,
+      });
+
+    expect(res2.status).toBe(200);
+    expect(res2.body.profile.resourceType).toBe('Patient');
+    expect(res2.body.profile.telecom).toBeUndefined();
+    expect(SESv2Client).toHaveBeenCalledTimes(0);
+    expect(SendEmailCommand).toHaveBeenCalledTimes(0);
+  });
+
+  test('Invite as client', async () => {
+    // First, Alice creates a project
+    const { project, accessToken, client } = await registerNew({
+      firstName: 'Alice',
+      lastName: 'Smith',
+      projectName: 'Alice Project',
+      email: `alice${randomUUID()}@example.com`,
+      password: 'password!@#',
+    });
+
+    // Get the client membership
+    const res2 = await request(app)
+      .get('/admin/projects/' + project.id)
+      .set('Authorization', 'Bearer ' + accessToken);
+    expect(res2.status).toBe(200);
+    expect(res2.body.project).toBeDefined();
+    expect(res2.body.members).toBeDefined();
+    expect(res2.body.members.length).toEqual(2);
+
+    const clientMembership = res2.body.members.find((m: any) => m.role === 'client');
+    expect(clientMembership).toBeDefined();
+
+    // Get the client membership details
+    const res4 = await request(app)
+      .get('/admin/projects/' + project.id + '/members/' + clientMembership.id)
+      .set('Authorization', 'Bearer ' + accessToken);
+    expect(res4.status).toBe(200);
+
+    // Promote the client to admin
+    const res7 = await request(app)
+      .post('/admin/projects/' + project.id + '/members/' + clientMembership.id)
+      .set('Authorization', 'Bearer ' + accessToken)
+      .type('json')
+      .send({
+        ...res4.body,
+        admin: true,
+      });
+    expect(res7.status).toBe(200);
+
+    // Call the invite endpoint as the client
+    const bobEmail = `bob${randomUUID()}@example.com`;
+    const res8 = await request(app)
+      .post('/admin/projects/' + project.id + '/invite')
+      .set('Authorization', 'Basic ' + Buffer.from(client.id + ':' + client.secret).toString('base64'))
+      .set('Content-Type', 'application/json')
+      .send({
+        resourceType: 'Patient',
+        firstName: 'Bob',
+        lastName: 'Jones',
+        email: bobEmail,
+      });
+    expect(res8.status).toBe(200);
+    expect(res8.body.profile.resourceType).toBe('Patient');
   });
 });

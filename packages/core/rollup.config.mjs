@@ -24,7 +24,7 @@ export default [
     input: 'src/index.ts',
     output: [
       {
-        file: 'dist/cjs/index.js',
+        file: 'dist/cjs/index.cjs',
         format: 'umd',
         name: 'medplum.core',
         sourcemap: true,
@@ -32,11 +32,10 @@ export default [
         globals,
       },
       {
-        file: 'dist/cjs/index.min.js',
+        file: 'dist/cjs/index.min.cjs',
         format: 'umd',
         name: 'medplum.core',
-        plugins: [terser()],
-        sourcemap: true,
+        plugins: [terser({ sourceMap: true })],
         sourcemapPathTransform,
         globals,
       },
@@ -51,7 +50,7 @@ export default [
       }),
       json(),
       resolve({ extensions }),
-      typescript({ tsconfig: 'tsconfig.cjs.json', resolveJsonModule: true }),
+      typescript({ outDir: 'dist/cjs', declaration: false }),
       {
         buildEnd: () => {
           mkdirSync('./dist/cjs', { recursive: true });
@@ -66,6 +65,7 @@ export default [
     output: [
       {
         dir: 'dist/esm',
+        entryFileNames: '[name].mjs',
         format: 'esm',
         preserveModules: true,
         preserveModulesRoot: 'src',
@@ -73,10 +73,9 @@ export default [
         sourcemapPathTransform,
       },
       {
-        file: 'dist/esm/index.min.js',
+        file: 'dist/esm/index.min.mjs',
         format: 'esm',
-        plugins: [terser()],
-        sourcemap: true,
+        plugins: [terser({ sourceMap: true })],
         sourcemapPathTransform,
       },
     ],
@@ -90,7 +89,7 @@ export default [
       }),
       json(),
       resolve({ extensions }),
-      typescript({ tsconfig: 'tsconfig.esm.json', resolveJsonModule: true }),
+      typescript({ module: 'es6', outDir: 'dist/esm', declaration: false }),
       {
         buildEnd: () => {
           mkdirSync('./dist/esm/node_modules/tslib', { recursive: true });

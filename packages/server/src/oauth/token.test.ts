@@ -1,5 +1,5 @@
-import { parseSearchDefinition } from '@medplum/core';
-import { ClientApplication, Login, Project, SmartAppLaunch } from '@medplum/fhirtypes';
+import { createReference, parseSearchDefinition } from '@medplum/core';
+import { AccessPolicy, ClientApplication, Login, Project, SmartAppLaunch } from '@medplum/fhirtypes';
 import { randomUUID } from 'crypto';
 import express from 'express';
 import { generateKeyPair, SignJWT } from 'jose';
@@ -44,13 +44,29 @@ describe('OAuth2 Token', () => {
     // Create a test project
     ({ project, client } = await createTestProject());
 
+    // Create access policy
+    const accessPolicy = await systemRepo.createResource<AccessPolicy>({
+      resourceType: 'AccessPolicy',
+      resource: [{ resourceType: '*' }],
+      ipAccessRule: [
+        { name: 'Block test', value: '6.6.6.6', action: 'block' },
+        { name: 'Allow by default', value: '*', action: 'allow' },
+      ],
+    });
+
     // Create a test user
-    const { user } = await inviteUser({
+    const { user, membership } = await inviteUser({
       project,
       resourceType: 'Practitioner',
       firstName: 'Test',
       lastName: 'User',
       email,
+    });
+
+    // Set the access policy
+    await systemRepo.updateResource({
+      ...membership,
+      accessPolicy: createReference(accessPolicy),
     });
 
     // Set the test user password
@@ -1166,5 +1182,32 @@ describe('OAuth2 Token', () => {
     expect(res2.status).toBe(200);
     expect(res2.body.patient).toBeDefined();
     expect(res2.body.encounter).toBeDefined();
+  });
+
+  test('IP address allow', async () => {
+    const res = await request(app).post('/auth/login').set('X-Forwarded-For', '5.5.5.5').type('json').send({
+      clientId: client.id,
+      email,
+      password,
+    });
+    expect(res.status).toBe(200);
+
+    const res2 = await request(app).post('/oauth2/token').type('form').send({
+      grant_type: 'authorization_code',
+      code: res.body.code,
+      client_id: client.id,
+      client_secret: client.secret,
+    });
+    expect(res2.status).toBe(200);
+  });
+
+  test('IP address block', async () => {
+    const res = await request(app).post('/auth/login').set('X-Forwarded-For', '6.6.6.6').type('json').send({
+      clientId: client.id,
+      email,
+      password,
+    });
+    expect(res.status).toBe(400);
+    expect(res.body.issue[0].details.text).toEqual('IP address not allowed');
   });
 });

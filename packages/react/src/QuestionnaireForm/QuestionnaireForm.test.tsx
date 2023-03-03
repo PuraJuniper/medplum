@@ -131,6 +131,7 @@ describe('QuestionnaireForm', () => {
 
     const response = onSubmit.mock.calls[0][0];
     expect(response.resourceType).toBe('QuestionnaireResponse');
+    expect(response.status).toBe('completed');
     expect(response.item).toHaveLength(2);
     expect(response.item[0].item).toHaveLength(2);
     expect(response.item[0].item[0].linkId).toBe('question1');
@@ -237,6 +238,31 @@ describe('QuestionnaireForm', () => {
     expect(answers['q2']).toMatchObject({ valueInteger: 2 });
     expect(answers['q3']).toMatchObject({ valueDate: '2023-03-03' });
     expect(answers['q6']).toMatchObject({ valueString: 'initial answer' });
+  });
+
+  test('Handles submit (empty)', async () => {
+    const onSubmit = jest.fn();
+
+    await setup({
+      questionnaire: {
+        resourceType: 'Questionnaire',
+      },
+      onSubmit,
+    });
+
+    expect(screen.getByTestId('questionnaire-form')).toBeInTheDocument();
+
+    await act(async () => {
+      fireEvent.click(screen.getByText('OK'));
+    });
+
+    expect(onSubmit).toBeCalled();
+
+    const response = onSubmit.mock.calls[0][0];
+    expect(response.resourceType).toBe('QuestionnaireResponse');
+    expect(response.status).toBe('completed');
+    expect(response.authored).toBeDefined();
+    expect(response.source).toBeDefined();
   });
 
   each([
