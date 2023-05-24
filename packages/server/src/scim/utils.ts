@@ -1,5 +1,5 @@
 import { badRequest, forbidden, getReferenceString, OperationOutcomeError, Operator } from '@medplum/core';
-import { BundleEntry, Project, ProjectMembership, Reference, User } from '@medplum/fhirtypes';
+import { Project, ProjectMembership, Reference, User } from '@medplum/fhirtypes';
 import { inviteUser } from '../admin/invite';
 import { getConfig } from '../config';
 import { systemRepo } from '../fhir/repo';
@@ -15,21 +15,17 @@ import { ScimListResponse, ScimUser } from './types';
  * @returns List of SCIM users in the project.
  */
 export async function searchScimUsers(project: Project): Promise<ScimListResponse<ScimUser>> {
-  const memberships = (
-    (
-      await systemRepo.search<ProjectMembership>({
-        resourceType: 'ProjectMembership',
-        count: 1000,
-        filters: [
-          {
-            code: 'project',
-            operator: Operator.EQUALS,
-            value: getReferenceString(project),
-          },
-        ],
-      })
-    ).entry as BundleEntry<ProjectMembership>[]
-  ).map((m) => m.resource as ProjectMembership);
+  const memberships = await systemRepo.searchResources<ProjectMembership>({
+    resourceType: 'ProjectMembership',
+    count: 1000,
+    filters: [
+      {
+        code: 'project',
+        operator: Operator.EQUALS,
+        value: getReferenceString(project),
+      },
+    ],
+  });
 
   const users = await systemRepo.readReferences(memberships.map((m) => m.user as Reference<User>));
   const result = [];
@@ -113,7 +109,7 @@ export async function readScimUser(project: Project, id: string): Promise<ScimUs
  * @returns The updated user.
  */
 export async function updateScimUser(project: Project, scimUser: ScimUser): Promise<ScimUser> {
-  const membership = await systemRepo.readResource<ProjectMembership>('ProjectMembership', scimUser.id as string);
+  let membership = await systemRepo.readResource<ProjectMembership>('ProjectMembership', scimUser.id as string);
   if (membership.project?.reference !== getReferenceString(project)) {
     throw new OperationOutcomeError(forbidden);
   }
@@ -128,6 +124,9 @@ export async function updateScimUser(project: Project, scimUser: ScimUser): Prom
   }
 
   user = await systemRepo.updateResource(user);
+
+  membership.externalId = scimUser.externalId;
+  membership = await systemRepo.updateResource(membership);
 
   return convertToScimUser(user, membership);
 }
@@ -189,7 +188,7 @@ export function convertToScimUser(user: User, membership: ProjectMembership): Sc
     },
     userType: resourceType,
     userName: id,
-    externalId: user.externalId,
+    externalId: membership.externalId || user.externalId,
     name: {
       givenName: user.firstName,
       familyName: user.lastName,

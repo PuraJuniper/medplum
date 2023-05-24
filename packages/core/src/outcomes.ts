@@ -8,6 +8,7 @@ const NOT_FOUND_ID = 'not-found';
 const UNAUTHORIZED_ID = 'unauthorized';
 const FORBIDDEN_ID = 'forbidden';
 const TOO_MANY_REQUESTS_ID = 'too-many-requests';
+const ACCEPTED_ID = 'accepted';
 
 export const allOk: OperationOutcome = {
   resourceType: 'OperationOutcome',
@@ -121,6 +122,20 @@ export const tooManyRequests: OperationOutcome = {
   ],
 };
 
+export const accepted: OperationOutcome = {
+  resourceType: 'OperationOutcome',
+  id: ACCEPTED_ID,
+  issue: [
+    {
+      severity: 'information',
+      code: 'informational',
+      details: {
+        text: 'Accepted',
+      },
+    },
+  ],
+};
+
 export function badRequest(details: string, expression?: string): OperationOutcome {
   return {
     resourceType: 'OperationOutcome',
@@ -205,7 +220,7 @@ export class OperationOutcomeError extends Error {
   readonly outcome: OperationOutcome;
 
   constructor(outcome: OperationOutcome, cause?: unknown) {
-    super(outcome?.issue?.[0].details?.text);
+    super(operationOutcomeToString(outcome));
     this.outcome = outcome;
     this.cause = cause;
   }
@@ -242,7 +257,26 @@ export function normalizeErrorString(error: unknown): string {
     return error.message;
   }
   if (isOperationOutcome(error)) {
-    return error.issue?.[0]?.details?.text ?? 'Unknown error';
+    return operationOutcomeToString(error);
   }
   return JSON.stringify(error);
+}
+
+/**
+ * Returns a string represenation of the operation outcome.
+ * @param outcome The operation outcome.
+ * @returns The string representation of the operation outcome.
+ */
+export function operationOutcomeToString(outcome: OperationOutcome): string {
+  const strs = [];
+  if (outcome.issue) {
+    for (const issue of outcome.issue) {
+      let issueStr = issue.details?.text || 'Unknown error';
+      if (issue.expression?.length) {
+        issueStr += ` (${issue.expression.join(', ')})`;
+      }
+      strs.push(issueStr);
+    }
+  }
+  return strs.length > 0 ? strs.join('; ') : 'Unknown error';
 }

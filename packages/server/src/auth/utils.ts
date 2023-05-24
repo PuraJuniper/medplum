@@ -1,11 +1,13 @@
-import { createReference, ProfileResource, resolveId } from '@medplum/core';
-import { AccessPolicy, ContactPoint, Login, Project, ProjectMembership, Reference, User } from '@medplum/fhirtypes';
+import { badRequest, createReference, OperationOutcomeError, ProfileResource, resolveId } from '@medplum/core';
+import { ContactPoint, Login, Project, ProjectMembership, Reference, User } from '@medplum/fhirtypes';
+import bcrypt from 'bcryptjs';
 import { Response } from 'express';
 import fetch from 'node-fetch';
+import { getConfig } from '../config';
 import { systemRepo } from '../fhir/repo';
 import { rewriteAttachments, RewriteMode } from '../fhir/rewrite';
 import { logger } from '../logger';
-import { getMembershipsForLogin } from '../oauth/utils';
+import { getClient, getMembershipsForLogin } from '../oauth/utils';
 
 export async function createProfile(
   project: Project,
@@ -40,17 +42,15 @@ export async function createProjectMembership(
   user: User,
   project: Project,
   profile: ProfileResource,
-  accessPolicy?: Reference<AccessPolicy>,
-  admin?: boolean
+  details?: Partial<ProjectMembership>
 ): Promise<ProjectMembership> {
   logger.info('Create project membership: ' + project.name);
   const result = await systemRepo.createResource<ProjectMembership>({
+    ...details,
     resourceType: 'ProjectMembership',
     project: createReference(project),
     user: createReference(user),
     profile: createReference(profile),
-    accessPolicy,
-    admin,
   });
   logger.info('Created: ' + result.id);
   return result;
@@ -138,4 +138,37 @@ export async function verifyRecaptcha(secretKey: string, recaptchaToken: string)
   const response = await fetch(url, { method: 'POST' });
   const json = (await response.json()) as { success: boolean };
   return json.success;
+}
+
+/**
+ * Returns project ID if clientId is provided.
+ * @param clientId clientId from the client
+ * @param projectId projectId from the client
+ * @returns The Project ID
+ * @throws OperationOutcomeError
+ */
+export async function getProjectIdByClientId(
+  clientId: string | undefined,
+  projectId: string | undefined
+): Promise<string | undefined> {
+  // For OAuth2 flow, check the clientId
+  if (clientId) {
+    const client = await getClient(clientId);
+    const clientProjectId = client.meta?.project as string;
+    if (projectId !== undefined && projectId !== clientProjectId) {
+      throw new OperationOutcomeError(badRequest('Invalid projectId'));
+    }
+    return clientProjectId;
+  }
+
+  return projectId;
+}
+
+/**
+ * Returns the bcrypt hash of the password.
+ * @param password The input password.
+ * @returns The bcrypt hash of the password.
+ */
+export function bcryptHashPassword(password: string): Promise<string> {
+  return bcrypt.hash(password, getConfig().bcryptHashSalt);
 }

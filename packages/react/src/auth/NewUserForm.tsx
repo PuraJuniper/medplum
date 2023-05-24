@@ -12,7 +12,7 @@ import { getRecaptcha, initRecaptcha } from '../utils/recaptcha';
 export interface NewUserFormProps {
   readonly projectId: string;
   readonly googleClientId?: string;
-  readonly recaptchaSiteKey: string;
+  readonly recaptchaSiteKey?: string;
   readonly children?: React.ReactNode;
   readonly handleAuthResponse: (response: LoginAuthenticationResponse) => void;
 }
@@ -24,14 +24,21 @@ export function NewUserForm(props: NewUserFormProps): JSX.Element {
   const [outcome, setOutcome] = useState<OperationOutcome>();
   const issues = getIssuesForExpression(outcome, undefined);
 
-  useEffect(() => initRecaptcha(recaptchaSiteKey), [recaptchaSiteKey]);
+  useEffect(() => {
+    if (recaptchaSiteKey) {
+      initRecaptcha(recaptchaSiteKey);
+    }
+  }, [recaptchaSiteKey]);
 
   return (
     <Form
       style={{ maxWidth: 400 }}
       onSubmit={async (formData: Record<string, string>) => {
         try {
-          const recaptchaToken = await getRecaptcha(recaptchaSiteKey);
+          let recaptchaToken = '';
+          if (recaptchaSiteKey) {
+            recaptchaToken = await getRecaptcha(recaptchaSiteKey);
+          }
           props.handleAuthResponse(
             await medplum.startNewUser({
               projectId: props.projectId,

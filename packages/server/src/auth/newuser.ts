@@ -1,6 +1,5 @@
 import { badRequest, NewUserRequest, Operator } from '@medplum/core';
 import { OperationOutcome, Project, User } from '@medplum/fhirtypes';
-import bcrypt from 'bcryptjs';
 import { randomUUID } from 'crypto';
 import { Request, Response } from 'express';
 import { body, validationResult } from 'express-validator';
@@ -10,14 +9,13 @@ import { invalidRequest, sendOutcome } from '../fhir/outcomes';
 import { systemRepo } from '../fhir/repo';
 import { logger } from '../logger';
 import { getUserByEmailInProject, getUserByEmailWithoutProject, tryLogin } from '../oauth/utils';
-import { verifyRecaptcha } from './utils';
+import { bcryptHashPassword, verifyRecaptcha } from './utils';
 
 export const newUserValidators = [
   body('firstName').notEmpty().withMessage('First name is required'),
   body('lastName').notEmpty().withMessage('Last name is required'),
   body('email').isEmail().withMessage('Valid email address is required'),
   body('password').isLength({ min: 8 }).withMessage('Password must be at least 8 characters'),
-  body('recaptchaToken').notEmpty().withMessage('Recaptcha token is required'),
 ];
 
 /**
@@ -26,6 +24,13 @@ export const newUserValidators = [
  * @param res The HTTP response.
  */
 export async function newUserHandler(req: Request, res: Response): Promise<void> {
+  const config = getConfig();
+  if (config.registerEnabled === false) {
+    // Explicitly check for "false" because the config value may be undefined
+    sendOutcome(res, badRequest('Registration is disabled'));
+    return;
+  }
+
   const errors = validationResult(req);
   if (!errors.isEmpty()) {
     sendOutcome(res, invalidRequest(errors));
@@ -40,7 +45,7 @@ export async function newUserHandler(req: Request, res: Response): Promise<void>
     // If the recaptcha site key is not the main Medplum recaptcha site key,
     // then it must be associated with a Project.
     // The user can only authenticate with that project.
-    project = await getProjectByRecaptchaSiteKey(recaptchaSiteKey);
+    project = await getProjectByRecaptchaSiteKey(recaptchaSiteKey, req.body.projectId as string | undefined);
     if (!project) {
       sendOutcome(res, badRequest('Invalid recaptchaSiteKey'));
       return;
@@ -56,18 +61,26 @@ export async function newUserHandler(req: Request, res: Response): Promise<void>
     }
   }
 
-  if (!(await verifyRecaptcha(secretKey as string, req.body.recaptchaToken))) {
-    sendOutcome(res, badRequest('Recaptcha failed'));
-    return;
+  if (secretKey) {
+    if (!req.body.recaptchaToken) {
+      sendOutcome(res, badRequest('Recaptcha token is required'));
+      return;
+    }
+
+    if (!(await verifyRecaptcha(secretKey, req.body.recaptchaToken))) {
+      sendOutcome(res, badRequest('Recaptcha failed'));
+      return;
+    }
   }
 
   // If the user is a practitioner, then projectId should be undefined
   // If the user is a patient, then projectId must be set
+  const email = req.body.email.toLowerCase();
   let existingUser = undefined;
   if (req.body.projectId && req.body.projectId !== 'new') {
-    existingUser = await getUserByEmailInProject(req.body.email, req.body.projectId);
+    existingUser = await getUserByEmailInProject(email, req.body.projectId);
   } else {
-    existingUser = await getUserByEmailWithoutProject(req.body.email);
+    existingUser = await getUserByEmailWithoutProject(email);
   }
   if (existingUser) {
     sendOutcome(res, badRequest('Email already registered', 'email'));
@@ -75,7 +88,7 @@ export async function newUserHandler(req: Request, res: Response): Promise<void>
   }
 
   try {
-    await createUser(req.body as NewUserRequest);
+    await createUser({ ...req.body, email } as NewUserRequest);
 
     const login = await tryLogin({
       authMethod: 'password',
@@ -84,7 +97,7 @@ export async function newUserHandler(req: Request, res: Response): Promise<void>
       nonce: req.body.nonce || randomUUID(),
       codeChallenge: req.body.codeChallenge,
       codeChallengeMethod: req.body.codeChallengeMethod,
-      email: req.body.email,
+      email,
       password: req.body.password,
       remember: req.body.remember,
       remoteAddress: req.ip,
@@ -105,7 +118,7 @@ export async function createUser(request: NewUserRequest): Promise<User> {
   }
 
   logger.info('Create user ' + email);
-  const passwordHash = await bcrypt.hash(password, 10);
+  const passwordHash = await bcryptHashPassword(password);
   const result = await systemRepo.createResource<User>({
     resourceType: 'User',
     firstName,
@@ -118,17 +131,30 @@ export async function createUser(request: NewUserRequest): Promise<User> {
   return result;
 }
 
-async function getProjectByRecaptchaSiteKey(recaptchaSiteKey: string): Promise<Project | undefined> {
+async function getProjectByRecaptchaSiteKey(
+  recaptchaSiteKey: string,
+  projectId: string | undefined
+): Promise<Project | undefined> {
+  const filters = [
+    {
+      code: 'recaptcha-site-key',
+      operator: Operator.EQUALS,
+      value: recaptchaSiteKey,
+    },
+  ];
+
+  if (projectId) {
+    filters.push({
+      code: '_id',
+      operator: Operator.EQUALS,
+      value: projectId,
+    });
+  }
+
   const bundle = await systemRepo.search<Project>({
     resourceType: 'Project',
     count: 1,
-    filters: [
-      {
-        code: 'recaptcha-site-key',
-        operator: Operator.EQUALS,
-        value: recaptchaSiteKey,
-      },
-    ],
+    filters,
   });
   return bundle.entry && bundle.entry.length > 0 ? bundle.entry[0].resource : undefined;
 }

@@ -26,7 +26,6 @@ export interface MedplumServerConfig {
   googleClientSecret?: string;
   recaptchaSiteKey?: string;
   recaptchaSecretKey?: string;
-  adminClientId?: string;
   maxJsonSize: string;
   allowedOrigins?: string;
   awsRegion: string;
@@ -34,6 +33,10 @@ export interface MedplumServerConfig {
   botLambdaLayerName: string;
   botCustomFunctionsEnabled?: boolean;
   logAuditEvents?: boolean;
+  auditEventLogGroup?: string;
+  auditEventLogStream?: string;
+  registerEnabled?: boolean;
+  bcryptHashSalt: number;
 }
 
 /**
@@ -151,6 +154,8 @@ async function loadAwsConfig(path: string): Promise<MedplumServerConfig> {
           config['redis'] = await loadAwsSecrets(region, value);
         } else if (key === 'port') {
           config.port = parseInt(value);
+        } else if (key === 'botCustomFunctionsEnabled' || key === 'logAuditEvents' || key === 'registerEnabled') {
+          config[key] = value === 'true';
         } else {
           config[key] = value;
         }
@@ -195,6 +200,7 @@ function addDefaults(config: MedplumServerConfig): MedplumServerConfig {
   config.maxJsonSize = config.maxJsonSize || '1mb';
   config.awsRegion = config.awsRegion || DEFAULT_AWS_REGION;
   config.botLambdaLayerName = config.botLambdaLayerName || 'medplum-bot-layer';
+  config.bcryptHashSalt = config.bcryptHashSalt || 10;
   return config;
 }
 

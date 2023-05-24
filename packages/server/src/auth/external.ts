@@ -1,4 +1,4 @@
-import { badRequest, OperationOutcomeError, parseJWTPayload } from '@medplum/core';
+import { badRequest, OAuthGrantType, OperationOutcomeError, parseJWTPayload } from '@medplum/core';
 import { ClientApplication, IdentityProvider } from '@medplum/fhirtypes';
 import { randomUUID } from 'crypto';
 import { Request, Response } from 'express';
@@ -76,10 +76,9 @@ export const externalCallbackHandler = async (req: Request, res: Response): Prom
     authMethod: 'external',
     email,
     externalId,
-    remember: true,
     projectId: projectId,
     clientId: body.clientId,
-    scope: body.scope || 'openid',
+    scope: body.scope || 'openid offline',
     nonce: body.nonce || randomUUID(),
     launchId: body.launch,
     codeChallenge: body.codeChallenge,
@@ -94,6 +93,7 @@ export const externalCallbackHandler = async (req: Request, res: Response): Prom
       return;
     }
     const redirectUrl = new URL(body.redirectUri);
+    redirectUrl.searchParams.set('login', login.id as string);
     redirectUrl.searchParams.set('code', login.code as string);
     res.redirect(redirectUrl.toString());
     return;
@@ -104,8 +104,12 @@ export const externalCallbackHandler = async (req: Request, res: Response): Prom
   redirectUrl.searchParams.set('login', login.id as string);
   redirectUrl.searchParams.set('scope', login.scope as string);
   redirectUrl.searchParams.set('nonce', login.nonce as string);
-  redirectUrl.searchParams.set('code_challenge', login.codeChallenge as string);
-  redirectUrl.searchParams.set('code_challenge_method', login.codeChallengeMethod as string);
+  if (login.codeChallenge) {
+    redirectUrl.searchParams.set('code_challenge', login.codeChallenge as string);
+  }
+  if (login.codeChallengeMethod) {
+    redirectUrl.searchParams.set('code_challenge_method', login.codeChallengeMethod as string);
+  }
   res.redirect(redirectUrl.toString());
 };
 
@@ -117,17 +121,17 @@ export const externalCallbackHandler = async (req: Request, res: Response): Prom
 async function getIdentityProvider(
   state: ExternalAuthState
 ): Promise<{ idp?: IdentityProvider; client?: ClientApplication }> {
-  if (state.domain) {
-    const domainConfig = await getDomainConfiguration(state.domain);
-    if (domainConfig?.identityProvider) {
-      return { idp: domainConfig.identityProvider };
-    }
-  }
-
   if (state.clientId) {
     const client = await systemRepo.readResource<ClientApplication>('ClientApplication', state.clientId);
     if (client?.identityProvider) {
       return { idp: client.identityProvider, client };
+    }
+  }
+
+  if (state.domain) {
+    const domainConfig = await getDomainConfiguration(state.domain);
+    if (domainConfig?.identityProvider) {
+      return { idp: domainConfig.identityProvider };
     }
   }
 
@@ -144,7 +148,7 @@ async function verifyCode(idp: IdentityProvider, code: string): Promise<Record<s
   const auth = Buffer.from(idp.clientId + ':' + idp.clientSecret).toString('base64');
 
   const params = new URLSearchParams();
-  params.append('grant_type', 'authorization_code');
+  params.append('grant_type', OAuthGrantType.AuthorizationCode);
   params.append('redirect_uri', getConfig().baseUrl + 'auth/external');
   params.append('code', code);
 

@@ -4,6 +4,7 @@ import {
   ElementDefinition,
   Reference,
   Resource,
+  ResourceType,
   SearchParameter,
   StructureDefinition,
 } from '@medplum/fhirtypes';
@@ -348,11 +349,11 @@ export function isResourceTypeSchema(typeSchema: TypeSchema): boolean {
  * Note that this is based on globalSchema, and will only return resource types that are currently in memory.
  * @returns An array of all resource types.
  */
-export function getResourceTypes(): string[] {
-  const result: string[] = [];
+export function getResourceTypes(): ResourceType[] {
+  const result: ResourceType[] = [];
   for (const [resourceType, typeSchema] of Object.entries(globalSchema.types)) {
     if (isResourceTypeSchema(typeSchema)) {
-      result.push(resourceType);
+      result.push(resourceType as ResourceType);
     }
   }
   return result;
@@ -401,7 +402,7 @@ export function getPropertyDisplayName(path: string): string {
     .replace(/\s+/g, ' ');
 }
 
-const capitalizedWords = new Set(['ID', 'PKCE', 'JWKS', 'URI', 'URL']);
+const capitalizedWords = new Set(['ID', 'IP', 'PKCE', 'JWKS', 'URI', 'URL']);
 
 function capitalizeDisplayWord(word: string): string {
   const upper = word.toUpperCase();
@@ -446,8 +447,10 @@ export function getElementDefinition(typeName: string, propertyName: string): El
  * @param value The object to check
  * @returns True if the input is of type 'object' and contains property 'resourceType'
  */
-export function isResource<T extends Resource = Resource>(value: T | Reference<T> | string | undefined): value is T {
-  return typeof value === 'object' && 'resourceType' in value;
+export function isResource<T extends Resource = Resource>(
+  value: T | Reference<T> | string | undefined | null
+): value is T {
+  return !!(value && typeof value === 'object' && 'resourceType' in value);
 }
 
 /**
@@ -456,9 +459,9 @@ export function isResource<T extends Resource = Resource>(value: T | Reference<T
  * @returns True if the input is of type 'object' and contains property 'reference'
  */
 export function isReference<T extends Resource>(
-  value: T | Reference<T> | string | undefined
+  value: T | Reference<T> | string | undefined | null
 ): value is Reference<T> & { reference: string } {
-  return typeof value === 'object' && 'reference' in value;
+  return !!(value && typeof value === 'object' && 'reference' in value);
 }
 
 /**

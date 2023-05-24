@@ -86,6 +86,8 @@ const config = {
         logo: {
           alt: 'Medplum Logo',
           src: 'img/logo.svg',
+          width: 24,
+          height: 32,
         },
         items: [
           {
@@ -184,10 +186,6 @@ const config = {
                 to: '/about',
               },
               {
-                label: 'Services',
-                to: '/services',
-              },
-              {
                 label: 'Security',
                 to: '/security',
               },
@@ -242,6 +240,10 @@ const config = {
         //... other Algolia params
       },
     }),
+  markdown: {
+    mermaid: true,
+  },
+  themes: ['@docusaurus/theme-mermaid'],
 };
 
 module.exports = config;

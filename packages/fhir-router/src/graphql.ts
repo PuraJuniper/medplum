@@ -3,6 +3,8 @@ import {
   badRequest,
   buildTypeName,
   capitalize,
+  DEFAULT_SEARCH_COUNT,
+  evalFhirPathTyped,
   Filter,
   forbidden,
   getElementDefinition,
@@ -10,6 +12,8 @@ import {
   getResourceTypes,
   getResourceTypeSchema,
   getSearchParameters,
+  globalSchema,
+  isLowerCase,
   isResourceTypeSchema,
   LRUCache,
   normalizeOperationOutcome,
@@ -17,6 +21,8 @@ import {
   Operator,
   parseSearchRequest,
   SearchRequest,
+  toJsBoolean,
+  toTypedValue,
 } from '@medplum/core';
 import {
   ElementDefinition,
@@ -104,6 +110,19 @@ let rootSchema: GraphQLSchema | undefined;
 interface GraphQLContext {
   repo: FhirRepository;
   dataLoader: DataLoader<Reference, Resource>;
+}
+
+interface ConnectionResponse {
+  count?: number;
+  offset?: number;
+  pageSize?: number;
+  edges?: ConnectionEdge[];
+}
+
+interface ConnectionEdge {
+  mode?: string;
+  score?: number;
+  resource?: Resource;
 }
 
 /**
@@ -203,6 +222,13 @@ function buildRootSchema(): GraphQLSchema {
       args: buildSearchArgs(resourceType),
       resolve: resolveBySearch,
     };
+
+    // FHIR GraphQL Connection API
+    fields[resourceType + 'Connection'] = {
+      type: buildConnectionType(resourceType, graphQLType),
+      args: buildSearchArgs(resourceType),
+      resolve: resolveByConnectionApi,
+    };
   }
 
   return new GraphQLSchema({
@@ -272,19 +298,114 @@ function buildPropertyFields(resourceType: string, fields: GraphQLFieldConfigMap
   for (const key of Object.keys(properties)) {
     const elementDefinition = getElementDefinition(resourceType, key) as ElementDefinition;
     for (const type of elementDefinition.type as ElementDefinitionType[]) {
-      let typeName = type.code as string;
-      if (typeName === 'Element' || typeName === 'BackboneElement') {
-        typeName = buildTypeName(elementDefinition.path?.split('.') as string[]);
-      }
-
-      const fieldConfig: GraphQLFieldConfig<any, any> = {
-        description: elementDefinition.short,
-        type: getPropertyType(elementDefinition, typeName),
-      };
-
-      const propertyName = key.replace('[x]', capitalize(type.code as string));
-      fields[propertyName] = fieldConfig;
+      buildPropertyField(fields, key, elementDefinition, type);
     }
+  }
+}
+
+function buildPropertyField(
+  fields: GraphQLFieldConfigMap<any, any>,
+  key: string,
+  elementDefinition: ElementDefinition,
+  elementDefinitionType: ElementDefinitionType
+): void {
+  let typeName = elementDefinitionType.code as string;
+  if (typeName === 'Element' || typeName === 'BackboneElement') {
+    typeName = buildTypeName(elementDefinition.path?.split('.') as string[]);
+  }
+
+  const fieldConfig: GraphQLFieldConfig<any, any> = {
+    description: elementDefinition.short,
+    type: getPropertyType(elementDefinition, typeName),
+    resolve: resolveField,
+  };
+
+  if (elementDefinition.max === '*') {
+    fieldConfig.args = buildListPropertyFieldArgs(typeName);
+  }
+
+  const propertyName = key.replace('[x]', capitalize(elementDefinitionType.code as string));
+  fields[propertyName] = fieldConfig;
+}
+
+/**
+ * Builds field arguments for a list property.
+ *
+ * The FHIR GraphQL specification defines the following arguments for list properties:
+ *   1. _count: Specify how many elements to return from a repeating list.
+ *   2. _offset: Specify the offset to start at for a repeating element.
+ *   3. fhirpath: A FHIRPath statement selecting which of the subnodes is to be included.
+ *   4. All properties of the list element type.
+ *
+ * See: https://hl7.org/fhir/R4/graphql.html#list
+ *
+ * @param fieldTypeName The type name of the field.
+ * @returns The arguments for the field.
+ */
+function buildListPropertyFieldArgs(fieldTypeName: string): GraphQLFieldConfigArgumentMap {
+  const fieldArgs: GraphQLFieldConfigArgumentMap = {
+    _count: {
+      type: GraphQLInt,
+      description: 'Specify how many elements to return from a repeating list.',
+    },
+    _offset: {
+      type: GraphQLInt,
+      description: 'Specify the offset to start at for a repeating element.',
+    },
+  };
+
+  if (!isLowerCase(fieldTypeName.charAt(0))) {
+    // If this is a backbone element, add "fhirpath" and all properties as arguments
+    fieldArgs.fhirpath = {
+      type: GraphQLString,
+      description: 'A FHIRPath statement selecting which of the subnodes is to be included',
+    };
+
+    // Add all "string" and "code" properties as arguments
+    const fieldTypeSchema = globalSchema.types[fieldTypeName];
+    if (fieldTypeSchema.properties) {
+      for (const fieldKey of Object.keys(fieldTypeSchema.properties)) {
+        const fieldElementDefinition = getElementDefinition(fieldTypeName, fieldKey) as ElementDefinition;
+        for (const type of fieldElementDefinition.type as ElementDefinitionType[]) {
+          buildListPropertyFieldArg(fieldArgs, fieldKey, fieldElementDefinition, type);
+        }
+      }
+    }
+  }
+
+  return fieldArgs;
+}
+
+/**
+ * Builds a field argument for a list property.
+ * @param fieldArgs The output argument map.
+ * @param fieldKey The key of the field.
+ * @param elementDefinition The FHIR element definition of the field.
+ * @param elementDefinitionType The FHIR element definition type of the field.
+ */
+function buildListPropertyFieldArg(
+  fieldArgs: GraphQLFieldConfigArgumentMap,
+  fieldKey: string,
+  elementDefinition: ElementDefinition,
+  elementDefinitionType: ElementDefinitionType
+): void {
+  const baseType = elementDefinitionType.code as string;
+  const fieldName = fieldKey.replace('[x]', capitalize(baseType));
+  switch (baseType) {
+    case 'canonical':
+    case 'code':
+    case 'id':
+    case 'oid':
+    case 'string':
+    case 'uri':
+    case 'url':
+    case 'uuid':
+    case 'http://hl7.org/fhirpath/System.String':
+      fieldArgs[fieldName] = {
+        type: GraphQLString,
+        description: elementDefinition.short,
+      };
+      break;
   }
 }
 
@@ -395,6 +516,33 @@ function getPropertyType(elementDefinition: ElementDefinition, typeName: string)
   return graphqlType;
 }
 
+function buildConnectionType(resourceType: ResourceType, resourceGraphQLType: GraphQLOutputType): GraphQLOutputType {
+  return new GraphQLObjectType({
+    name: resourceType + 'Connection',
+    fields: {
+      count: { type: GraphQLInt },
+      offset: { type: GraphQLInt },
+      pageSize: { type: GraphQLInt },
+      first: { type: GraphQLString },
+      previous: { type: GraphQLString },
+      next: { type: GraphQLString },
+      last: { type: GraphQLString },
+      edges: {
+        type: new GraphQLList(
+          new GraphQLObjectType({
+            name: resourceType + 'ConnectionEdge',
+            fields: {
+              mode: { type: GraphQLString },
+              score: { type: GraphQLFloat },
+              resource: { type: resourceGraphQLType },
+            },
+          })
+        ),
+      },
+    },
+  });
+}
+
 /**
  * GraphQL data loader for search requests.
  * The field name should always end with "List" (i.e., "Patient" search uses "PatientList").
@@ -413,10 +561,46 @@ async function resolveBySearch(
   info: GraphQLResolveInfo
 ): Promise<Resource[] | undefined> {
   const fieldName = info.fieldName;
-  const resourceType = fieldName.substring(0, fieldName.length - 4) as ResourceType; // Remove "List"
+  const resourceType = fieldName.substring(0, fieldName.length - 'List'.length) as ResourceType;
   const searchRequest = parseSearchArgs(resourceType, source, args);
   const bundle = await ctx.repo.search(searchRequest);
   return bundle.entry?.map((e) => e.resource as Resource);
+}
+
+/**
+ * GraphQL data loader for search requests.
+ * The field name should always end with "List" (i.e., "Patient" search uses "PatientList").
+ * The search args should be FHIR search parameters.
+ * @param source The source/root.  This should always be null for our top level readers.
+ * @param args The GraphQL search arguments.
+ * @param ctx The GraphQL context.
+ * @param info The GraphQL resolve info.  This includes the schema, and additional field details.
+ * @returns Promise to read the resoures for the query.
+ * @implements {GraphQLFieldResolver}
+ */
+async function resolveByConnectionApi(
+  source: any,
+  args: Record<string, string>,
+  ctx: GraphQLContext,
+  info: GraphQLResolveInfo
+): Promise<ConnectionResponse | undefined> {
+  const fieldName = info.fieldName;
+  const resourceType = fieldName.substring(0, fieldName.length - 'Connection'.length) as ResourceType;
+  const searchRequest = parseSearchArgs(resourceType, source, args);
+  if (isFieldRequested(info, 'count')) {
+    searchRequest.total = 'accurate';
+  }
+  const bundle = await ctx.repo.search(searchRequest);
+  return {
+    count: bundle.total,
+    offset: searchRequest.offset || 0,
+    pageSize: searchRequest.count || DEFAULT_SEARCH_COUNT,
+    edges: bundle.entry?.map((e) => ({
+      mode: e.search?.mode,
+      score: e.search?.score,
+      resource: e.resource as Resource,
+    })),
+  };
 }
 
 /**
@@ -476,6 +660,45 @@ function resolveTypeByReference(resource: Resource | undefined): string | undefi
   return (getGraphQLType(resourceType) as GraphQLObjectType).name;
 }
 
+/**
+ * GraphQL resolver for fields.
+ * In the common case, this is just a matter of returning the field value from the source object.
+ * If the field is a list and the user specifies list arguments, then we can apply those arguments here.
+ * @param source The source. This is the object that contains the field.
+ * @param args The GraphQL search arguments.
+ * @param _ctx The GraphQL context.
+ * @param info The GraphQL resolve info.  This includes the field name.
+ * @returns Promise to read the resoure for the query.
+ * @implements {GraphQLFieldResolver}
+ */
+async function resolveField(source: any, args: any, _ctx: GraphQLContext, info: GraphQLResolveInfo): Promise<any> {
+  const fieldValue = source?.[info.fieldName];
+  if (!args || !fieldValue) {
+    return fieldValue;
+  }
+
+  const { _offset, _count, fhirpath, ...rest } = args;
+  let array = fieldValue as any[];
+
+  for (const [key, value] of Object.entries(rest)) {
+    array = array.filter((item) => item[key] === value);
+  }
+
+  if (fhirpath) {
+    array = array.filter((item) => toJsBoolean(evalFhirPathTyped(fhirpath, [toTypedValue(item)])));
+  }
+
+  if (_offset) {
+    array = array.slice(_offset);
+  }
+
+  if (_count) {
+    array = array.slice(0, _count);
+  }
+
+  return array;
+}
+
 function parseSearchArgs(resourceType: ResourceType, source: any, args: Record<string, string>): SearchRequest {
   let referenceFilter: Filter | undefined = undefined;
   if (source) {
@@ -531,7 +754,7 @@ const MaxDepthRule = (context: ValidationContext): ASTVisitor => ({
     path: ReadonlyArray<string | number>
   ): any {
     const depth = getDepth(path);
-    const maxDepth = 8;
+    const maxDepth = 12;
     if (depth > maxDepth) {
       const fieldName = node.name.value;
       context.reportError(
@@ -552,6 +775,20 @@ const MaxDepthRule = (context: ValidationContext): ASTVisitor => ({
  */
 function getDepth(path: ReadonlyArray<string | number>): number {
   return path.filter((p) => p === 'selections').length;
+}
+
+/**
+ * Returns true if the field is requested in the GraphQL query.
+ * @param info The GraphQL resolve info.  This includes the field name.
+ * @param fieldName The field name to check.
+ * @returns True if the field is requested in the GraphQL query.
+ */
+function isFieldRequested(info: GraphQLResolveInfo, fieldName: string): boolean {
+  return info.fieldNodes.some((fieldNode) =>
+    fieldNode.selectionSet?.selections.some((selection) => {
+      return selection.kind === 'Field' && selection.name.value === fieldName;
+    })
+  );
 }
 
 /**

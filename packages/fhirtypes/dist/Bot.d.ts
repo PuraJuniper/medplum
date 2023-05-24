@@ -4,8 +4,10 @@
  */
 
 import { Attachment } from './Attachment';
+import { CodeableConcept } from './CodeableConcept';
 import { Identifier } from './Identifier';
 import { Meta } from './Meta';
+import { Timing } from './Timing';
 
 /**
  * Bot account for automated actions.
@@ -70,9 +72,25 @@ export interface Bot {
   photo?: Attachment;
 
   /**
+   * A schedule for the bot to be executed.
+   */
+  cronTiming?: Timing;
+
+  /**
+   * A schedule for the bot to be executed.
+   */
+  cronString?: string;
+
+  /**
    * Bot logic script.
    */
   code?: string;
+
+  /**
+   * A code that classifies the service for searching, sorting and display
+   * purposes (e.g. &quot;Surgical Procedure&quot;).
+   */
+  category?: CodeableConcept[];
 
   /**
    * Optional flag to indicate that the bot should be run as the user.

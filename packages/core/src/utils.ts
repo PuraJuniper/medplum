@@ -8,6 +8,7 @@ import {
   ObservationDefinitionQualifiedInterval,
   Patient,
   Practitioner,
+  ProjectMembership,
   QuestionnaireResponse,
   QuestionnaireResponseItem,
   QuestionnaireResponseItemAnswer,
@@ -22,6 +23,22 @@ import { formatHumanName } from './format';
  * @internal
  */
 export type ProfileResource = Patient | Practitioner | RelatedPerson;
+
+/**
+ * @internal
+ */
+export interface InviteResult {
+  profile: ProfileResource;
+  membership: ProjectMembership;
+}
+
+interface Code {
+  code?: CodeableConcept;
+}
+/**
+ * @internal
+ */
+export type ResourceWithCode = Resource & Code;
 
 /**
  * Creates a reference resource.
@@ -731,4 +748,23 @@ function toPreciseInteger(a: number, precision?: number): number {
     return a;
   }
   return Math.round(a * Math.pow(10, precision));
+}
+
+/**
+ * Finds the first resource in the input array that matches the specified code and system.
+ * @param resources - The array of resources to search.
+ * @param code - The code to search for.
+ * @param system - The system to search for.
+ * @returns The first resource in the input array that matches the specified code and system, or undefined if no such resource is found.
+ */
+export function findResourceByCode(
+  resources: ResourceWithCode[],
+  code: CodeableConcept | string,
+  system: string
+): ResourceWithCode | undefined {
+  return resources.find((r) =>
+    typeof code === 'string'
+      ? getCodeBySystem(r.code || {}, system) === code
+      : getCodeBySystem(r.code || {}, system) === getCodeBySystem(code, system)
+  );
 }

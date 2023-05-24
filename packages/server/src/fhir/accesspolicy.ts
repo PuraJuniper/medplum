@@ -188,12 +188,19 @@ function applyProjectAdminAccessPolicy(
 
     accessPolicy.resource.push({
       resourceType: 'Project',
+      criteria: `Project?_id=${resolveId(membership.project)}`,
       readonlyFields: ['superAdmin', 'features'],
     });
 
     accessPolicy.resource.push({
       resourceType: 'ProjectMembership',
+      criteria: `ProjectMembership?project=${membership.project?.reference}`,
       readonlyFields: ['project', 'user'],
+    });
+
+    accessPolicy.resource.push({
+      resourceType: 'PasswordChangeRequest',
+      readonly: true,
     });
   }
 

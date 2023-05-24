@@ -17,7 +17,7 @@ function getTabs(resourceType: string): string[] {
   const result = ['Timeline'];
 
   if (resourceType === 'Bot') {
-    result.push('Editor');
+    result.push('Editor', 'Subscriptions');
   }
 
   if (resourceType === 'PlanDefinition') {
@@ -25,7 +25,7 @@ function getTabs(resourceType: string): string[] {
   }
 
   if (resourceType === 'Questionnaire') {
-    result.push('Preview', 'Builder', 'Bots');
+    result.push('Preview', 'Builder', 'Bots', 'Responses');
   }
 
   if (resourceType === 'DiagnosticReport') {
@@ -40,7 +40,7 @@ function getTabs(resourceType: string): string[] {
     result.push('Ranges');
   }
 
-  result.push('Details', 'Edit', 'History', 'Blame', 'JSON', 'Apps');
+  result.push('Details', 'Edit', 'Event', 'History', 'Blame', 'JSON', 'Apps');
   return result;
 }
 

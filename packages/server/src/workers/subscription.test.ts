@@ -9,6 +9,7 @@ import { getClient } from '../database';
 import { Repository, systemRepo } from '../fhir/repo';
 import { createTestProject } from '../test.setup';
 import { closeSubscriptionWorker, execSubscriptionJob, getSubscriptionQueue } from './subscription';
+import { AuditEventOutcome } from '../util/auditevent';
 
 jest.mock('node-fetch');
 
@@ -93,6 +94,54 @@ describe('Subscription Worker', () => {
         body: stringify(patient),
       })
     );
+
+    // Clear the queue
+    queue.add.mockClear();
+
+    // Update the patient
+    await repo.updateResource({ ...patient, active: true });
+
+    // Update should also trigger the subscription
+    expect(queue.add).toHaveBeenCalled();
+  });
+
+  test('Status code 201', async () => {
+    const url = 'https://example.com/subscription';
+
+    const subscription = await repo.createResource<Subscription>({
+      resourceType: 'Subscription',
+      reason: 'test',
+      status: 'active',
+      criteria: 'Patient',
+      channel: {
+        type: 'rest-hook',
+        endpoint: url,
+      },
+    });
+    expect(subscription).toBeDefined();
+
+    const queue = getSubscriptionQueue() as any;
+    queue.add.mockClear();
+
+    const patient = await repo.createResource<Patient>({
+      resourceType: 'Patient',
+      name: [{ given: ['Alice'], family: 'Smith' }],
+    });
+    expect(patient).toBeDefined();
+    expect(queue.add).toHaveBeenCalled();
+
+    (fetch as unknown as jest.Mock).mockImplementation(() => ({ status: 201 }));
+
+    const job = { id: 1, data: queue.add.mock.calls[0][1] } as unknown as Job;
+    await execSubscriptionJob(job);
+
+    expect(fetch).toHaveBeenCalledWith(
+      url,
+      expect.objectContaining({
+        method: 'POST',
+        body: stringify(patient),
+      })
+    );
   });
 
   test('Send subscription with custom headers', async () => {
@@ -139,7 +188,118 @@ describe('Subscription Worker', () => {
     );
   });
 
+  test('Create-only subscription', async () => {
+    const url = 'https://example.com/subscription';
+
+    const subscription = await repo.createResource<Subscription>({
+      resourceType: 'Subscription',
+      reason: 'test',
+      status: 'active',
+      criteria: 'Patient',
+      channel: {
+        type: 'rest-hook',
+        endpoint: url,
+      },
+      extension: [
+        {
+          url: 'https://medplum.com/fhir/StructureDefinition/subscription-supported-interaction',
+          valueCode: 'create',
+        },
+      ],
+    });
+    expect(subscription).toBeDefined();
+
+    // Clear the queue
+    const queue = getSubscriptionQueue() as any;
+    queue.add.mockClear();
+
+    // Create the patient
+    const patient = await repo.createResource<Patient>({
+      resourceType: 'Patient',
+      name: [{ given: ['Alice'], family: 'Smith' }],
+    });
+    expect(patient).toBeDefined();
+
+    // Create should trigger the subscription
+    expect(queue.add).toHaveBeenCalled();
+
+    (fetch as unknown as jest.Mock).mockImplementation(() => ({ status: 200 }));
+
+    const job = { id: 1, data: queue.add.mock.calls[0][1] } as unknown as Job;
+    await execSubscriptionJob(job);
+
+    expect(fetch).toHaveBeenCalledWith(
+      url,
+      expect.objectContaining({
+        method: 'POST',
+        body: stringify(patient),
+      })
+    );
+
+    // Clear the queue
+    queue.add.mockClear();
+
+    // Update the patient
+    await repo.updateResource({ ...patient, active: true });
+
+    // Update should not trigger the subscription
+    expect(queue.add).not.toHaveBeenCalled();
+  });
+
   test('Send subscriptions with signature', async () => {
+    const url = 'https://example.com/subscription';
+    const secret = '0123456789';
+
+    const subscription = await repo.createResource<Subscription>({
+      resourceType: 'Subscription',
+      reason: 'test',
+      status: 'active',
+      criteria: 'Patient',
+      channel: {
+        type: 'rest-hook',
+        endpoint: url,
+      },
+      extension: [
+        {
+          url: 'https://www.medplum.com/fhir/StructureDefinition/subscription-secret',
+          valueString: secret,
+        },
+      ],
+    });
+    expect(subscription).toBeDefined();
+
+    const queue = getSubscriptionQueue() as any;
+    queue.add.mockClear();
+
+    const patient = await repo.createResource<Patient>({
+      resourceType: 'Patient',
+      name: [{ given: ['Alice'], family: 'Smith' }],
+    });
+    expect(patient).toBeDefined();
+    expect(queue.add).toHaveBeenCalled();
+
+    (fetch as unknown as jest.Mock).mockImplementation(() => ({ status: 200 }));
+
+    const body = stringify(patient);
+    const signature = createHmac('sha256', secret).update(body).digest('hex');
+
+    const job = { id: 1, data: queue.add.mock.calls[0][1] } as unknown as Job;
+    await execSubscriptionJob(job);
+
+    expect(fetch).toHaveBeenCalledWith(
+      url,
+      expect.objectContaining({
+        method: 'POST',
+        body,
+        headers: {
+          'Content-Type': 'application/fhir+json',
+          'X-Signature': signature,
+        },
+      })
+    );
+  });
+
+  test('Send subscriptions with legacy signature extension', async () => {
     const url = 'https://example.com/subscription';
     const secret = '0123456789';
 
@@ -417,6 +577,12 @@ describe('Subscription Worker', () => {
         type: 'rest-hook',
         endpoint: url,
       },
+      extension: [
+        {
+          url: 'https://medplum.com/fhir/StructureDefinition/subscription-max-attempts',
+          valueInteger: 3,
+        },
+      ],
     });
     expect(subscription).toBeDefined();
 
@@ -432,7 +598,7 @@ describe('Subscription Worker', () => {
 
     (fetch as unknown as jest.Mock).mockImplementation(() => ({ status: 429 }));
 
-    const job = { id: 1, data: queue.add.mock.calls[0][1] } as unknown as Job;
+    const job = { id: 1, data: queue.add.mock.calls[0][1], attemptsMade: 2 } as unknown as Job;
 
     // If the job throws, then the QueueScheduler will retry
     await expect(execSubscriptionJob(job)).rejects.toThrow();
@@ -450,6 +616,12 @@ describe('Subscription Worker', () => {
         type: 'rest-hook',
         endpoint: url,
       },
+      extension: [
+        {
+          url: 'https://medplum.com/fhir/StructureDefinition/subscription-max-attempts',
+          valueInteger: 3,
+        },
+      ],
     });
     expect(subscription).toBeDefined();
 
@@ -467,10 +639,49 @@ describe('Subscription Worker', () => {
       throw new Error();
     });
 
-    const job = { id: 1, data: queue.add.mock.calls[0][1] } as unknown as Job;
+    const job = { id: 1, data: queue.add.mock.calls[0][1], attemptsMade: 2 } as unknown as Job;
 
     // If the job throws, then the QueueScheduler will retry
     await expect(execSubscriptionJob(job)).rejects.toThrow();
+  });
+
+  test('Do not throw after max job attempts', async () => {
+    const url = 'https://example.com/subscription';
+    const subscription = await repo.createResource<Subscription>({
+      resourceType: 'Subscription',
+      reason: 'test',
+      status: 'active',
+      criteria: 'Patient',
+      channel: {
+        type: 'rest-hook',
+        endpoint: url,
+      },
+      extension: [
+        {
+          url: 'https://medplum.com/fhir/StructureDefinition/subscription-max-attempts',
+          valueInteger: 1,
+        },
+      ],
+    });
+    expect(subscription).toBeDefined();
+
+    const queue = getSubscriptionQueue() as any;
+    queue.add.mockClear();
+
+    const patient = await repo.createResource<Patient>({
+      resourceType: 'Patient',
+      name: [{ given: ['Alice'], family: 'Smith' }],
+    });
+    expect(patient).toBeDefined();
+    expect(queue.add).toHaveBeenCalled();
+
+    (fetch as unknown as jest.Mock).mockImplementation(() => {
+      throw new Error();
+    });
+
+    const job = { id: 1, data: queue.add.mock.calls[0][1], attemptsMade: 1 } as unknown as Job;
+    // Job shouldn't throw after max attempts, which will cause it to not retry
+    expect(execSubscriptionJob(job)).resolves;
   });
 
   test('Ignore bots if feature not enabled', async () => {
@@ -725,7 +936,7 @@ describe('Subscription Worker', () => {
     // But let's delete the resource
     await repo.deleteResource('Patient', patient.id as string);
 
-    const job = { id: 1, data: queue.add.mock.calls[0][1] } as unknown as Job;
+    const job = { id: 1, data: queue.add.mock.calls[0][1], attemptsMade: 2 } as unknown as Job;
     await execSubscriptionJob(job);
 
     // Fetch should not have been called
@@ -802,5 +1013,70 @@ describe('Subscription Worker', () => {
     expect(auditEvent.meta?.account).toBeDefined();
     expect(auditEvent.meta?.account?.reference).toEqual(account.reference);
     expect(auditEvent.entity).toHaveLength(2);
+  });
+
+  test('Audit Event outcome from custom codes', async () => {
+    const project = randomUUID();
+    const account = {
+      reference: 'Organization/' + randomUUID(),
+    };
+
+    const subscription = await systemRepo.createResource<Subscription>({
+      resourceType: 'Subscription',
+      reason: 'test',
+      meta: {
+        project,
+        account,
+      },
+      status: 'active',
+      criteria: 'Patient',
+      channel: {
+        type: 'rest-hook',
+        endpoint: 'https://example.com/subscription',
+      },
+      extension: [
+        {
+          url: 'https://medplum.com/fhir/StructureDefinition/subscription-success-codes',
+          valueString: '200,201,410-600',
+        },
+      ],
+    });
+    expect(subscription).toBeDefined();
+
+    const queue = getSubscriptionQueue() as any;
+    queue.add.mockClear();
+
+    const patient = await systemRepo.createResource<Patient>({
+      resourceType: 'Patient',
+      meta: {
+        project,
+        account,
+      },
+      name: [{ given: ['Alice'], family: 'Smith' }],
+    });
+    expect(patient).toBeDefined();
+    expect(queue.add).toHaveBeenCalled();
+
+    (fetch as unknown as jest.Mock).mockImplementation(() => ({ status: 515 }));
+
+    const job = { id: 1, data: queue.add.mock.calls[0][1] } as unknown as Job;
+    await execSubscriptionJob(job);
+
+    const bundle = await systemRepo.search<AuditEvent>({
+      resourceType: 'AuditEvent',
+      filters: [
+        {
+          code: 'entity',
+          operator: Operator.EQUALS,
+          value: getReferenceString(subscription as Subscription),
+        },
+      ],
+    });
+
+    expect(bundle.entry?.length).toEqual(1);
+
+    const auditEvent = bundle?.entry?.[0].resource as AuditEvent;
+    // Should return a successful AuditEventOutcome with a normally failing status
+    expect(auditEvent.outcome).toEqual(AuditEventOutcome.Success);
   });
 });

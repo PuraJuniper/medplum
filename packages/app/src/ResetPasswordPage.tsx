@@ -1,31 +1,40 @@
 import { Anchor, Button, Group, Stack, TextInput, Title } from '@mantine/core';
 import { normalizeOperationOutcome } from '@medplum/core';
 import { OperationOutcome } from '@medplum/fhirtypes';
-import { Document, Form, getErrorsForInput, getRecaptcha, initRecaptcha, Logo, useMedplum } from '@medplum/react';
+import { Document, Form, Logo, getErrorsForInput, getRecaptcha, initRecaptcha, useMedplum } from '@medplum/react';
 import React, { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-
-const recaptchaSiteKey = process.env.RECAPTCHA_SITE_KEY as string;
+import { getConfig } from './config';
 
 export function ResetPasswordPage(): JSX.Element {
   const navigate = useNavigate();
   const medplum = useMedplum();
   const [outcome, setOutcome] = useState<OperationOutcome>();
   const [success, setSuccess] = useState(false);
+  const recaptchaSiteKey = getConfig().recaptchaSiteKey;
 
   useEffect(() => {
-    initRecaptcha(recaptchaSiteKey);
-  }, []);
+    if (recaptchaSiteKey) {
+      initRecaptcha(recaptchaSiteKey);
+    }
+  }, [recaptchaSiteKey]);
 
   return (
     <Document width={450}>
       <Form
         style={{ maxWidth: 400 }}
-        onSubmit={(formData: Record<string, string>) => {
-          getRecaptcha(recaptchaSiteKey)
-            .then((recaptchaToken: string) => medplum.post('auth/resetpassword', { ...formData, recaptchaToken }))
+        onSubmit={async (formData: Record<string, string>) => {
+          let recaptchaToken = '';
+          if (recaptchaSiteKey) {
+            recaptchaToken = await getRecaptcha(recaptchaSiteKey);
+          }
+
+          medplum
+            .post('auth/resetpassword', { ...formData, recaptchaToken })
             .then(() => setSuccess(true))
-            .catch((err) => setOutcome(normalizeOperationOutcome(err)));
+            .catch((err) => {
+              setOutcome(normalizeOperationOutcome(err));
+            });
         }}
       >
         <Stack spacing="lg" mb="xl" align="center">

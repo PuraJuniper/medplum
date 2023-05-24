@@ -31,6 +31,7 @@ import {
 import React, { useEffect, useRef, useState } from 'react';
 import { Container } from '../Container/Container';
 import { useMedplum } from '../MedplumProvider/MedplumProvider';
+import { SearchExportDialog } from '../SearchExportDialog/SearchExportDialog';
 import { SearchFieldEditor } from '../SearchFieldEditor/SearchFieldEditor';
 import { SearchFilterEditor } from '../SearchFilterEditor/SearchFilterEditor';
 import { SearchFilterValueDialog } from '../SearchFilterValueDialog/SearchFilterValueDialog';
@@ -81,6 +82,8 @@ export interface SearchControlProps {
   onAuxClick?: (e: SearchClickEvent) => void;
   onNew?: () => void;
   onExport?: () => void;
+  onExportCsv?: () => void;
+  onExportTransactionBundle?: () => void;
   onDelete?: (ids: string[]) => void;
   onPatch?: (ids: string[]) => void;
   onBulk?: (ids: string[]) => void;
@@ -92,6 +95,7 @@ interface SearchControlState {
   fieldEditorVisible: boolean;
   filterEditorVisible: boolean;
   filterDialogVisible: boolean;
+  exportDialogVisible: boolean;
   filterDialogFilter?: Filter;
   filterDialogSearchParam?: SearchParameter;
 }
@@ -120,7 +124,7 @@ const useStyles = createStyles((theme) => ({
 
   control: {
     width: '100%',
-    padding: `${theme.spacing.xs}px ${theme.spacing.md}px`,
+    padding: `${theme.spacing.xs} ${theme.spacing.md}`,
 
     '&:hover': {
       backgroundColor: theme.colorScheme === 'dark' ? theme.colors.dark[6] : theme.colors.gray[0],
@@ -150,6 +154,7 @@ export function SearchControl(props: SearchControlProps): JSX.Element {
     selected: {},
     fieldEditorVisible: false,
     filterEditorVisible: false,
+    exportDialogVisible: false,
     filterDialogVisible: false,
   });
 
@@ -161,7 +166,7 @@ export function SearchControl(props: SearchControlProps): JSX.Element {
     medplum
       .search(
         search.resourceType as ResourceType,
-        formatSearchQuery({ ...search, total: 'accurate', fields: undefined })
+        formatSearchQuery({ ...search, total: search.total ?? 'estimate', fields: undefined })
       )
       .then((response) => {
         setState({ ...stateRef.current, searchResponse: response });
@@ -257,6 +262,10 @@ export function SearchControl(props: SearchControlProps): JSX.Element {
     }
   }
 
+  function isExportPassed(): boolean {
+    return !!(props.onExport || props.onExportCsv || props.onExportTransactionBundle);
+  }
+
   useEffect(() => {
     setSchemaLoaded(false);
     medplum
@@ -295,7 +304,7 @@ export function SearchControl(props: SearchControlProps): JSX.Element {
               compact
               variant={buttonVariant}
               color={buttonColor}
-              leftIcon={<IconFilter size={iconSize} />}
+              leftIcon={<IconColumns size={iconSize} />}
               onClick={() => setState({ ...stateRef.current, fieldEditorVisible: true })}
             >
               Fields
@@ -304,7 +313,7 @@ export function SearchControl(props: SearchControlProps): JSX.Element {
               compact
               variant={buttonVariant}
               color={buttonColor}
-              leftIcon={<IconColumns size={iconSize} />}
+              leftIcon={<IconFilter size={iconSize} />}
               onClick={() => setState({ ...stateRef.current, filterEditorVisible: true })}
             >
               Filters
@@ -320,13 +329,15 @@ export function SearchControl(props: SearchControlProps): JSX.Element {
                 New...
               </Button>
             )}
-            {!isMobile && props.onExport && (
+            {!isMobile && isExportPassed() && (
               <Button
                 compact
                 variant={buttonVariant}
                 color={buttonColor}
                 leftIcon={<IconTableExport size={iconSize} />}
-                onClick={props.onExport}
+                onClick={
+                  props.onExport ? props.onExport : () => setState({ ...stateRef.current, exportDialogVisible: true })
+                }
               >
                 Export...
               </Button>
@@ -471,17 +482,17 @@ export function SearchControl(props: SearchControlProps): JSX.Element {
       {lastResult?.total !== undefined && lastResult.total > 0 && (
         <Center m="md" p="md">
           <Pagination
-            page={getPage(search)}
+            value={getPage(search)}
             total={getTotalPages(search, lastResult.total)}
             onChange={(newPage) => emitSearchChange(setPage(search, newPage))}
-            getItemAriaLabel={(page) => {
-              switch (page) {
-                case 'prev':
-                  return 'Previous page';
+            getControlProps={(control) => {
+              switch (control) {
+                case 'previous':
+                  return { 'aria-label': 'Previous page' };
                 case 'next':
-                  return 'Next page';
+                  return { 'aria-label': 'Next page' };
                 default:
-                  return undefined;
+                  return {};
               }
             }}
           />
@@ -523,6 +534,17 @@ export function SearchControl(props: SearchControlProps): JSX.Element {
           setState({
             ...stateRef.current,
             filterEditorVisible: false,
+          });
+        }}
+      />
+      <SearchExportDialog
+        visible={stateRef.current.exportDialogVisible}
+        exportCsv={props.onExportCsv}
+        exportTransactionBundle={props.onExportTransactionBundle}
+        onCancel={() => {
+          setState({
+            ...stateRef.current,
+            exportDialogVisible: false,
           });
         }}
       />

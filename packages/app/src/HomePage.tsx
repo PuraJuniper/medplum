@@ -1,24 +1,26 @@
 import { createStyles, Paper } from '@mantine/core';
 import { showNotification } from '@mantine/notifications';
 import {
+  convertToTransactionBundle,
   DEFAULT_SEARCH_COUNT,
   Filter,
   formatSearchQuery,
+  MedplumClient,
   normalizeErrorString,
   parseSearchDefinition,
   SearchRequest,
   SortRule,
 } from '@medplum/core';
-import { ResourceType, UserConfiguration } from '@medplum/fhirtypes';
-import { MemoizedSearchControl, useMedplum } from '@medplum/react';
+import { Bundle, ResourceType, UserConfiguration } from '@medplum/fhirtypes';
+import { Loading, MemoizedSearchControl, useMedplum } from '@medplum/react';
 import React, { useEffect, useState } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
-import { Loading } from './components/Loading';
+import { exportJSONFile } from './utils';
 
 const useStyles = createStyles((theme) => {
   return {
     paper: {
-      [`@media (max-width: ${theme.breakpoints.sm}px)`]: {
+      [`@media (max-width: ${theme.breakpoints.sm})`]: {
         margin: 2,
         padding: 4,
       },
@@ -38,7 +40,7 @@ export function HomePage(): JSX.Element {
     const parsedSearch = parseSearchDefinition(location.pathname + location.search);
 
     // Fill in the search with default values
-    const populatedSearch = addDefaultSearchValues(parsedSearch, medplum.getUserConfiguration());
+    const populatedSearch = addSearchValues(parsedSearch, medplum.getUserConfiguration());
 
     if (
       location.pathname === `/${populatedSearch.resourceType}` &&
@@ -75,13 +77,18 @@ export function HomePage(): JSX.Element {
               }
             : undefined
         }
-        onExport={() => {
+        onExportCsv={() => {
           const url = medplum.fhirUrl(search.resourceType, '$csv') + formatSearchQuery(search);
           medplum
             .download(url)
-            .then((blob) => {
+            .then((blob: Blob) => {
               window.open(window.URL.createObjectURL(blob), '_blank');
             })
+            .catch((err) => showNotification({ color: 'red', message: normalizeErrorString(err) }));
+        }}
+        onExportTransactionBundle={async () => {
+          getTransactionBundle(search, medplum)
+            .then((bundle) => exportJSONFile(JSON.stringify(bundle, undefined, 2)))
             .catch((err) => showNotification({ color: 'red', message: normalizeErrorString(err) }));
         }}
         onDelete={(ids: string[]) => {
@@ -110,7 +117,7 @@ export function HomePage(): JSX.Element {
   );
 }
 
-function addDefaultSearchValues(search: SearchRequest, config: UserConfiguration | undefined): SearchRequest {
+function addSearchValues(search: SearchRequest, config: UserConfiguration | undefined): SearchRequest {
   const resourceType = search.resourceType || getDefaultResourceType(config);
   const fields = search.fields ?? getDefaultFields(resourceType);
   const filters = search.filters ?? (!search.resourceType ? getDefaultFilters(resourceType) : undefined);
@@ -217,4 +224,19 @@ function saveLastSearch(search: SearchRequest): void {
 
 function canCreate(resourceType: string): boolean {
   return resourceType !== 'Bot' && resourceType !== 'ClientApplication';
+}
+
+async function getTransactionBundle(search: SearchRequest, medplum: MedplumClient): Promise<Bundle> {
+  const transactionBundleSearch: SearchRequest = {
+    resourceType: search.resourceType,
+    count: 1000,
+    offset: 0,
+    filters: search.filters,
+  };
+  const transactionBundleSearchValues = addSearchValues(transactionBundleSearch, medplum.getUserConfiguration());
+  const bundle = await medplum.search(
+    transactionBundleSearchValues.resourceType as ResourceType,
+    formatSearchQuery({ ...transactionBundleSearchValues, total: 'accurate', fields: undefined })
+  );
+  return convertToTransactionBundle(bundle);
 }

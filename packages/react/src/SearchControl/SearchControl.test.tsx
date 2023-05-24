@@ -337,13 +337,13 @@ describe('SearchControl', () => {
   });
 
   test('Export button', async () => {
-    const onExport = jest.fn();
+    const onExportCsv = jest.fn();
 
     await setup({
       search: {
         resourceType: 'Patient',
       },
-      onExport,
+      onExportCsv,
     });
 
     await waitFor(() => screen.getByText('Export...'));
@@ -352,7 +352,11 @@ describe('SearchControl', () => {
       fireEvent.click(screen.getByText('Export...'));
     });
 
-    expect(onExport).toBeCalled();
+    await waitFor(() => screen.getByText('Export as CSV'));
+
+    await act(async () => {
+      fireEvent.click(screen.getByText('Export as CSV'));
+    });
   });
 
   test('Delete button', async () => {
@@ -794,5 +798,28 @@ describe('SearchControl', () => {
     expect(props.onLoad).toBeCalled();
     expect(screen.getByText('Homer Simpson')).toBeInTheDocument();
     expect(screen.queryByText('no filters')).not.toBeInTheDocument();
+  });
+
+  test('Handle reference missing filter', async () => {
+    const props: SearchControlProps = {
+      search: {
+        resourceType: 'Patient',
+        fields: ['id', '_lastUpdated', 'name', 'organization'],
+        filters: [
+          {
+            code: 'organization',
+            operator: Operator.MISSING,
+            value: 'true',
+          },
+        ],
+      },
+      onLoad: jest.fn(),
+    };
+
+    await setup(props);
+
+    await waitFor(() => screen.getByText('missing true'));
+
+    expect(screen.getByText('missing true')).toBeInTheDocument();
   });
 });

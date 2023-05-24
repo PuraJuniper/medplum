@@ -13,6 +13,14 @@ import {
 import { Bundle, BundleEntry, Reference, Resource } from '@medplum/fhirtypes';
 import { applyPatch, Operation } from 'rfc6902';
 
+/**
+ * The FhirRepository interface defines the methods that are required to implement a FHIR repository.
+ * A FHIR repository is responsible for storing and retrieving FHIR resources.
+ * It is used by the FHIR router to implement the FHIR REST API.
+ * The primary implementations at this time are:
+ *  1. MemoryRepository - A repository that stores resources in memory.
+ *  2. Server Repository - A repository that stores resources in a relational database.
+ */
 export interface FhirRepository {
   /**
    * Creates a FHIR resource.
@@ -120,15 +128,90 @@ export interface FhirRepository {
    * @returns The search results.
    */
   search<T extends Resource>(searchRequest: SearchRequest): Promise<Bundle<T>>;
+
+  /**
+   * Searches for a single FHIR resource.
+   *
+   * This is a convenience method for `search()` that returns the first resource rather than a `Bundle`.
+   *
+   * The return value is the resource, if available; otherwise, undefined.
+   *
+   * See FHIR search for full details: https://www.hl7.org/fhir/search.html
+   *
+   * @param searchRequest The FHIR search request.
+   * @returns Promise to the first search result or undefined.
+   */
+  searchOne<T extends Resource>(searchRequest: SearchRequest<T>): Promise<T | undefined>;
+
+  /**
+   * Sends a FHIR search request for an array of resources.
+   *
+   * This is a convenience method for `search()` that returns the resources as an array rather than a `Bundle`.
+   *
+   * The return value is an array of resources.
+   *
+   * See FHIR search for full details: https://www.hl7.org/fhir/search.html
+   *
+   * @param searchRequest The FHIR search request.
+   * @returns Promise to the array of search results.
+   */
+  searchResources<T extends Resource>(searchRequest: SearchRequest<T>): Promise<T[]>;
 }
 
-export class MemoryRepository implements FhirRepository {
-  readonly #resources: Record<string, Record<string, Resource>>;
-  readonly #history: Record<string, Record<string, Resource[]>>;
+export abstract class BaseRepository {
+  /**
+   * Searches for FHIR resources.
+   *
+   * See: https://www.hl7.org/fhir/http.html#search
+   *
+   * @param searchRequest The FHIR search request.
+   * @returns The search results.
+   */
+  abstract search<T extends Resource>(searchRequest: SearchRequest<T>): Promise<Bundle<T>>;
+
+  /**
+   * Searches for a single FHIR resource.
+   *
+   * This is a convenience method for `search()` that returns the first resource rather than a `Bundle`.
+   *
+   * The return value is the resource, if available; otherwise, undefined.
+   *
+   * See FHIR search for full details: https://www.hl7.org/fhir/search.html
+   *
+   * @param searchRequest The FHIR search request.
+   * @returns Promise to the first search result or undefined.
+   */
+  async searchOne<T extends Resource>(searchRequest: SearchRequest<T>): Promise<T | undefined> {
+    const bundle = await this.search({ ...searchRequest, count: 1 });
+    return bundle.entry?.[0]?.resource as T | undefined;
+  }
+
+  /**
+   * Sends a FHIR search request for an array of resources.
+   *
+   * This is a convenience method for `search()` that returns the resources as an array rather than a `Bundle`.
+   *
+   * The return value is an array of resources.
+   *
+   * See FHIR search for full details: https://www.hl7.org/fhir/search.html
+   *
+   * @param searchRequest The FHIR search request.
+   * @returns Promise to the array of search results.
+   */
+  async searchResources<T extends Resource>(searchRequest: SearchRequest<T>): Promise<T[]> {
+    const bundle = await this.search(searchRequest);
+    return bundle.entry?.map((e) => e.resource as T) || [];
+  }
+}
+
+export class MemoryRepository extends BaseRepository implements FhirRepository {
+  private readonly resources: Map<string, Map<string, Resource>>;
+  private readonly history: Map<string, Map<string, Resource[]>>;
 
   constructor() {
-    this.#resources = {};
-    this.#history = {};
+    super();
+    this.resources = new Map();
+    this.history = new Map();
   }
 
   async createResource<T extends Resource>(resource: T): Promise<T> {
@@ -152,20 +235,25 @@ export class MemoryRepository implements FhirRepository {
 
     const { resourceType, id } = result as { resourceType: string; id: string };
 
-    if (!(resourceType in this.#resources)) {
-      this.#resources[resourceType] = {};
+    let resources = this.resources.get(resourceType);
+    if (!resources) {
+      resources = new Map();
+      this.resources.set(resourceType, resources);
     }
+    resources.set(id, result);
 
-    if (!(resourceType in this.#history)) {
-      this.#history[resourceType] = {};
+    let resourceTypeHistory = this.history.get(resourceType);
+    if (!resourceTypeHistory) {
+      resourceTypeHistory = new Map();
+      this.history.set(resourceType, resourceTypeHistory);
     }
-
-    if (!(id in this.#history[resourceType])) {
-      this.#history[resourceType][id] = [];
+    let resourceHistory = resourceTypeHistory.get(id);
+    if (!resourceHistory) {
+      resourceHistory = [];
+      resourceTypeHistory.set(id, resourceHistory);
     }
+    resourceHistory.push(result);
 
-    this.#resources[resourceType][id] = result;
-    this.#history[resourceType][id].push(result);
     return deepClone(result);
   }
 
@@ -198,7 +286,7 @@ export class MemoryRepository implements FhirRepository {
   }
 
   async readResource<T extends Resource>(resourceType: string, id: string): Promise<T> {
-    const resource = this.#resources?.[resourceType]?.[id] as T | undefined;
+    const resource = this.resources.get(resourceType)?.get(id) as T | undefined;
     if (!resource) {
       throw new OperationOutcomeError(notFound);
     }
@@ -222,7 +310,7 @@ export class MemoryRepository implements FhirRepository {
     return {
       resourceType: 'Bundle',
       type: 'history',
-      entry: ((this.#history?.[resourceType]?.[id] ?? []) as T[])
+      entry: ((this.history.get(resourceType)?.get(id) || []) as T[])
         .reverse()
         .map((version) => ({ resource: deepClone(version) })),
     };
@@ -230,7 +318,10 @@ export class MemoryRepository implements FhirRepository {
 
   async readVersion<T extends Resource>(resourceType: string, id: string, versionId: string): Promise<T> {
     await this.readResource(resourceType, id);
-    const version = this.#history?.[resourceType]?.[id]?.find((v) => v.meta?.versionId === versionId) as T | undefined;
+    const version = this.history
+      .get(resourceType)
+      ?.get(id)
+      ?.find((v) => v.meta?.versionId === versionId) as T | undefined;
     if (!version) {
       throw new OperationOutcomeError(notFound);
     }
@@ -239,8 +330,13 @@ export class MemoryRepository implements FhirRepository {
 
   async search<T extends Resource>(searchRequest: SearchRequest): Promise<Bundle<T>> {
     const { resourceType } = searchRequest;
-    const resources = this.#resources[resourceType] ?? {};
-    const result = Object.values(resources).filter((resource) => matchesSearchRequest(resource, searchRequest));
+    const resources = this.resources.get(resourceType) || new Map();
+    const result = [];
+    for (const resource of resources.values()) {
+      if (matchesSearchRequest(resource, searchRequest)) {
+        result.push(resource);
+      }
+    }
     let entry = result.map((resource) => ({ resource: deepClone(resource) })) as BundleEntry<T>[];
     if (searchRequest.sortRules) {
       for (const sortRule of searchRequest.sortRules) {
@@ -262,10 +358,10 @@ export class MemoryRepository implements FhirRepository {
   }
 
   async deleteResource(resourceType: string, id: string): Promise<void> {
-    if (!this.#resources?.[resourceType]?.[id]) {
+    if (!this.resources.get(resourceType)?.get(id)) {
       throw new OperationOutcomeError(notFound);
     }
-    delete this.#resources[resourceType][id];
+    this.resources.get(resourceType)?.delete(id);
   }
 }
 

@@ -11,8 +11,8 @@ import {
 } from '@medplum/core';
 import {
   AccessPolicy,
-  BundleEntry,
   ClientApplication,
+  IdentityProvider,
   Login,
   Project,
   ProjectMembership,
@@ -23,21 +23,22 @@ import {
 } from '@medplum/fhirtypes';
 import bcrypt from 'bcryptjs';
 import { timingSafeEqual } from 'crypto';
-import { JWTPayload } from 'jose';
+import { JWTPayload, jwtVerify, VerifyOptions } from 'jose';
+import fetch from 'node-fetch';
 import { authenticator } from 'otplib';
 import { getAccessPolicyForLogin } from '../fhir/accesspolicy';
 import { systemRepo } from '../fhir/repo';
+import { logger } from '../logger';
 import { AuditEventOutcome, logAuthEvent, LoginEvent } from '../util/auditevent';
 import { generateAccessToken, generateIdToken, generateRefreshToken, generateSecret } from './keys';
 
 export interface LoginRequest {
   readonly email?: string;
   readonly externalId?: string;
-  readonly authMethod: 'password' | 'google' | 'external';
+  readonly authMethod: 'password' | 'google' | 'external' | 'exchange';
   readonly password?: string;
   readonly scope: string;
   readonly nonce: string;
-  readonly remember: boolean;
   readonly resourceType?: ResourceType;
   readonly projectId?: string;
   readonly clientId?: string;
@@ -47,6 +48,8 @@ export interface LoginRequest {
   readonly googleCredentials?: GoogleCredentialClaims;
   readonly remoteAddress?: string;
   readonly userAgent?: string;
+  /** @deprecated Use scope of "offline" or "offline_access" instead. */
+  readonly remember?: boolean;
 }
 
 export interface TokenResult {
@@ -87,12 +90,30 @@ export interface GoogleCredentialClaims extends JWTPayload {
   readonly picture: string;
 }
 
+/**
+ * Returns the client application by ID.
+ * Handles special cases for "built-in" clients.
+ * @param clientId The client ID.
+ * @returns The client application.
+ */
+export async function getClient(clientId: string): Promise<ClientApplication> {
+  if (clientId === 'medplum-cli') {
+    return {
+      resourceType: 'ClientApplication',
+      id: 'medplum-cli',
+      redirectUri: 'http://localhost:9615',
+      pkceOptional: true,
+    };
+  }
+  return systemRepo.readResource<ClientApplication>('ClientApplication', clientId);
+}
+
 export async function tryLogin(request: LoginRequest): Promise<Login> {
   validateLoginRequest(request);
 
   let client: ClientApplication | undefined;
   if (request.clientId) {
-    client = await systemRepo.readResource<ClientApplication>('ClientApplication', request.clientId);
+    client = await getClient(request.clientId);
   }
 
   validatePkce(request, client);
@@ -115,7 +136,7 @@ export async function tryLogin(request: LoginRequest): Promise<Login> {
 
   await authenticate(request, user);
 
-  const refreshSecret = request.remember ? generateSecret(32) : undefined;
+  const refreshSecret = includeRefreshToken(request) ? generateSecret(32) : undefined;
 
   const login = await systemRepo.createResource<Login>({
     resourceType: 'Login',
@@ -149,7 +170,7 @@ export async function tryLogin(request: LoginRequest): Promise<Login> {
 }
 
 export function validateLoginRequest(request: LoginRequest): void {
-  if (request.authMethod === 'external') {
+  if (request.authMethod === 'external' || request.authMethod === 'exchange') {
     if (!request.externalId && !request.email) {
       throw new OperationOutcomeError(badRequest('Missing email or externalId', 'externalId'));
     }
@@ -215,7 +236,7 @@ async function authenticate(request: LoginRequest, user: User): Promise<void> {
     return;
   }
 
-  if (request.authMethod === 'external') {
+  if (request.authMethod === 'external' || request.authMethod === 'exchange') {
     // Verified by external auth provider
     return;
   }
@@ -294,13 +315,11 @@ export async function getMembershipsForLogin(login: Login): Promise<ProjectMembe
     });
   }
 
-  const bundle = await systemRepo.search<ProjectMembership>({
+  let memberships = await systemRepo.searchResources<ProjectMembership>({
     resourceType: 'ProjectMembership',
     count: 100,
     filters,
   });
-
-  let memberships = (bundle.entry as BundleEntry<ProjectMembership>[]).map((e) => e.resource as ProjectMembership);
 
   const profileType = login.profileType;
   if (profileType) {
@@ -527,7 +546,27 @@ export async function revokeLogin(login: Login): Promise<void> {
  * @returns The user if found; otherwise, undefined.
  */
 export async function getUserByExternalId(externalId: string, projectId: string): Promise<User | undefined> {
-  const bundle = await systemRepo.search({
+  const membership = await systemRepo.searchOne<ProjectMembership>({
+    resourceType: 'ProjectMembership',
+    filters: [
+      {
+        code: 'external-id',
+        operator: Operator.EXACT,
+        value: externalId,
+      },
+      {
+        code: 'project',
+        operator: Operator.EQUALS,
+        value: 'Project/' + projectId,
+      },
+    ],
+  });
+  if (membership) {
+    return systemRepo.readReference(membership.user as Reference<User>);
+  }
+
+  // Deprecated: Support legacy User.externalId
+  return systemRepo.searchOne<User>({
     resourceType: 'User',
     filters: [
       {
@@ -542,7 +581,6 @@ export async function getUserByExternalId(externalId: string, projectId: string)
       },
     ],
   });
-  return bundle.entry && bundle.entry.length > 0 ? (bundle.entry[0].resource as User) : undefined;
 }
 
 /**
@@ -576,7 +614,7 @@ export async function getUserByEmailInProject(email: string, projectId: string):
       {
         code: 'email',
         operator: Operator.EXACT,
-        value: email,
+        value: email.toLowerCase(),
       },
       {
         code: 'project',
@@ -601,7 +639,7 @@ export async function getUserByEmailWithoutProject(email: string): Promise<User 
       {
         code: 'email',
         operator: Operator.EXACT,
-        value: email,
+        value: email.toLowerCase(),
       },
       {
         code: 'project',
@@ -630,4 +668,77 @@ export function timingSafeEqualStr(a: string, b: string): boolean {
   const buf1 = Buffer.from(a);
   const buf2 = Buffer.from(b);
   return buf1.length === buf2.length && timingSafeEqual(buf1, buf2);
+}
+
+/**
+ * Determines if the login request should include a refresh token.
+ * @param request The login request.
+ * @returns True if the login should include a refresh token.
+ */
+function includeRefreshToken(request: LoginRequest): boolean {
+  // Deprecated legacy "remember" flag
+  if (request.remember) {
+    return true;
+  }
+
+  // Check for offline scope
+  // Google calls it "offline": https://developers.google.com/identity/protocols/oauth2/web-server#offline
+  // Auth0 calls it "offline_access": https://auth0.com/docs/secure/tokens/refresh-tokens/get-refresh-tokens
+  // We support both
+  const scopeArray = request.scope.split(' ');
+  return scopeArray.includes('offline') || scopeArray.includes('offline_access');
+}
+
+/**
+ * Returns the external identity provider user info for an access token.
+ * This can be used to verify the access token and get the user's email address.
+ * @param idp The identity provider configuration.
+ * @param externalAccessToken The external identity provider access token.
+ * @returns The user info claims.
+ */
+export async function getExternalUserInfo(
+  idp: IdentityProvider,
+  externalAccessToken: string
+): Promise<Record<string, unknown>> {
+  try {
+    const response = await fetch(idp.userInfoUrl as string, {
+      method: 'GET',
+      headers: {
+        Accept: 'application/json',
+        Authorization: `Bearer ${externalAccessToken}`,
+      },
+    });
+
+    return await response.json();
+  } catch (err) {
+    logger.warn('Failed to verify code', err);
+    throw new OperationOutcomeError(badRequest('Failed to verify code - check your identity provider configuration'));
+  }
+}
+
+interface ValidationAssertion {
+  clientId?: string;
+  clientSecret?: string;
+  error?: string;
+}
+export async function verifyMultipleMatchingException(
+  publicKeys: AsyncIterableIterator<any>,
+  clientId: string,
+  clientAssertion: string,
+  verifyOptions: VerifyOptions,
+  client: ClientApplication
+): Promise<ValidationAssertion> {
+  for await (const publicKey of publicKeys) {
+    try {
+      await jwtVerify(clientAssertion, publicKey, verifyOptions);
+      // If we validate successfully inside the catch we can validate the client assertion
+      return { clientId, clientSecret: client.secret };
+    } catch (innerError: any) {
+      if (innerError?.code === 'ERR_JWS_SIGNATURE_VERIFICATION_FAILED') {
+        continue;
+      }
+      return { error: innerError.code };
+    }
+  }
+  return { error: 'ERR_JWS_SIGNATURE_VERIFICATION_FAILED' };
 }
